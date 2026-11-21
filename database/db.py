@@ -176,6 +176,9 @@ def create_session(user_id):
 
 
 def get_session(token):
+    if not token:
+        return None
+
     with get_connection() as connection:
         cursor = connection.execute(
             """
@@ -206,11 +209,6 @@ def close_session(token):
 
 
 def search_users(search_text, current_user_id):
-    """
-    Шукає користувачів за логіном або відображуваним ім'ям.
-    Поточний користувач не включається у результати.
-    """
-
     if not search_text:
         return []
 
@@ -252,6 +250,392 @@ def search_users(search_text, current_user_id):
         }
         for user in users
     ]
+
+
+def get_user_chats(user_id):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                c.ChatId,
+
+                other_user.UserId AS OtherUserId,
+                other_user.Username AS OtherUsername,
+                other_user.DisplayName AS OtherDisplayName,
+
+                (
+                    SELECT m.Text
+                    FROM Messages m
+                    WHERE
+                        m.ChatId = c.ChatId
+                        AND m.IsDeleted = 0
+                        AND (
+                            current_member.ClearedAt IS NULL
+                            OR m.SentAt > current_member.ClearedAt
+                        )
+                    ORDER BY m.SentAt DESC, m.MessageId DESC
+                    LIMIT 1
+                ) AS LastMessage,
+
+                (
+                    SELECT m.SentAt
+                    FROM Messages m
+                    WHERE
+                        m.ChatId = c.ChatId
+                        AND m.IsDeleted = 0
+                        AND (
+                            current_member.ClearedAt IS NULL
+                            OR m.SentAt > current_member.ClearedAt
+                        )
+                    ORDER BY m.SentAt DESC, m.MessageId DESC
+                    LIMIT 1
+                ) AS LastMessageAt,
+
+                (
+                    SELECT COUNT(*)
+                    FROM Messages m
+                    WHERE
+                        m.ChatId = c.ChatId
+                        AND m.SenderId != ?
+                        AND m.ReadAt IS NULL
+                        AND m.IsDeleted = 0
+                        AND (
+                            current_member.ClearedAt IS NULL
+                            OR m.SentAt > current_member.ClearedAt
+                        )
+                ) AS UnreadCount
+
+            FROM ChatMembers current_member
+
+            JOIN Chats c
+                ON c.ChatId = current_member.ChatId
+
+            JOIN ChatMembers other_member
+                ON other_member.ChatId = c.ChatId
+                AND other_member.UserId != current_member.UserId
+
+            JOIN Users other_user
+                ON other_user.UserId = other_member.UserId
+
+            WHERE
+                current_member.UserId = ?
+                AND other_user.IsDeleted = 0
+
+            ORDER BY
+                COALESCE(LastMessageAt, c.CreatedAt) DESC
+            """,
+            (
+                user_id,
+                user_id
+            )
+        )
+
+        chats = cursor.fetchall()
+
+    return [
+        {
+            "chat_id": chat["ChatId"],
+            "user_id": chat["OtherUserId"],
+            "username": chat["OtherUsername"],
+            "display_name": chat["OtherDisplayName"],
+            "last_message": chat["LastMessage"],
+            "last_message_at": chat["LastMessageAt"],
+            "unread_count": chat["UnreadCount"]
+        }
+        for chat in chats
+    ]
+
+
+def save_message(sender_id, recipient_id, text):
+    if not isinstance(text, str) or not text.strip():
+        return {
+            "success": False,
+            "message": "Текст повідомлення не може бути порожнім."
+        }
+
+    try:
+        recipient_id = int(recipient_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний отримувач."
+        }
+
+    if sender_id == recipient_id:
+        return {
+            "success": False,
+            "message": "Не можна надіслати повідомлення самому собі."
+        }
+
+    text = text.strip()
+
+    with get_connection() as connection:
+        recipient = connection.execute(
+            """
+            SELECT UserId
+            FROM Users
+            WHERE
+                UserId = ?
+                AND IsDeleted = 0
+                AND IsBlocked = 0
+            """,
+            (recipient_id,)
+        ).fetchone()
+
+        if recipient is None:
+            return {
+                "success": False,
+                "message": "Отримувача не знайдено."
+            }
+
+        chat = connection.execute(
+            """
+            SELECT c.ChatId
+            FROM Chats c
+
+            JOIN ChatMembers first_member
+                ON first_member.ChatId = c.ChatId
+                AND first_member.UserId = ?
+
+            JOIN ChatMembers second_member
+                ON second_member.ChatId = c.ChatId
+                AND second_member.UserId = ?
+
+            WHERE (
+                SELECT COUNT(*)
+                FROM ChatMembers member_count
+                WHERE member_count.ChatId = c.ChatId
+            ) = 2
+
+            LIMIT 1
+            """,
+            (
+                sender_id,
+                recipient_id
+            )
+        ).fetchone()
+
+        if chat is None:
+            cursor = connection.execute(
+                """
+                INSERT INTO Chats DEFAULT VALUES
+                """
+            )
+
+            chat_id = cursor.lastrowid
+
+            connection.execute(
+                """
+                INSERT INTO ChatMembers (ChatId, UserId)
+                VALUES (?, ?)
+                """,
+                (chat_id, sender_id)
+            )
+
+            connection.execute(
+                """
+                INSERT INTO ChatMembers (ChatId, UserId)
+                VALUES (?, ?)
+                """,
+                (chat_id, recipient_id)
+            )
+
+        else:
+            chat_id = chat["ChatId"]
+
+        cursor = connection.execute(
+            """
+            INSERT INTO Messages (
+                ChatId,
+                SenderId,
+                Text,
+                ReadAt,
+                IsDeleted
+            )
+            VALUES (?, ?, ?, NULL, 0)
+            """,
+            (
+                chat_id,
+                sender_id,
+                text
+            )
+        )
+
+        message_id = cursor.lastrowid
+
+        message = connection.execute(
+            """
+            SELECT *
+            FROM Messages
+            WHERE MessageId = ?
+            """,
+            (message_id,)
+        ).fetchone()
+
+    return {
+        "success": True,
+        "message": "Повідомлення успішно збережено.",
+        "message_data": {
+            "message_id": message["MessageId"],
+            "chat_id": message["ChatId"],
+            "sender_id": message["SenderId"],
+            "text": message["Text"],
+            "sent_at": message["SentAt"],
+            "read_at": message["ReadAt"],
+            "is_deleted": message["IsDeleted"]
+        }
+    }
+
+
+def get_chat_history(user_id, chat_id):
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор чату."
+        }
+
+    with get_connection() as connection:
+        membership = connection.execute(
+            """
+            SELECT ClearedAt
+            FROM ChatMembers
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        ).fetchone()
+
+        if membership is None:
+            return {
+                "success": False,
+                "message": "Користувач не має доступу до цього чату."
+            }
+
+        cleared_at = membership["ClearedAt"]
+
+        cursor = connection.execute(
+            """
+            SELECT
+                m.MessageId,
+                m.ChatId,
+                m.SenderId,
+                u.Username AS SenderUsername,
+                u.DisplayName AS SenderDisplayName,
+                m.Text,
+                m.SentAt,
+                m.ReadAt
+
+            FROM Messages m
+
+            JOIN Users u
+                ON u.UserId = m.SenderId
+
+            WHERE
+                m.ChatId = ?
+                AND m.IsDeleted = 0
+                AND (
+                    ? IS NULL
+                    OR m.SentAt > ?
+                )
+
+            ORDER BY
+                m.SentAt ASC,
+                m.MessageId ASC
+            """,
+            (
+                chat_id,
+                cleared_at,
+                cleared_at
+            )
+        )
+
+        messages = cursor.fetchall()
+
+    return {
+        "success": True,
+        "messages": [
+            {
+                "message_id": message["MessageId"],
+                "chat_id": message["ChatId"],
+                "sender_id": message["SenderId"],
+                "sender_username": message["SenderUsername"],
+                "sender_display_name": message["SenderDisplayName"],
+                "text": message["Text"],
+                "sent_at": message["SentAt"],
+                "read_at": message["ReadAt"]
+            }
+            for message in messages
+        ]
+    }
+
+
+def mark_messages_as_read(user_id, chat_id):
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор чату."
+        }
+
+    with get_connection() as connection:
+        membership = connection.execute(
+            """
+            SELECT 1
+            FROM ChatMembers
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        ).fetchone()
+
+        if membership is None:
+            return {
+                "success": False,
+                "message": "Користувач не має доступу до цього чату."
+            }
+
+        read_at = connection.execute(
+            """
+            SELECT datetime('now')
+            """
+        ).fetchone()[0]
+
+        cursor = connection.execute(
+            """
+            UPDATE Messages
+            SET ReadAt = ?
+            WHERE
+                ChatId = ?
+                AND SenderId != ?
+                AND ReadAt IS NULL
+                AND IsDeleted = 0
+            """,
+            (
+                read_at,
+                chat_id,
+                user_id
+            )
+        )
+
+        updated_count = cursor.rowcount
+
+    return {
+        "success": True,
+        "message": "Повідомлення позначено як прочитані.",
+        "updated_count": updated_count,
+        "read_at": read_at
+    }
 
 
 if __name__ == "__main__":

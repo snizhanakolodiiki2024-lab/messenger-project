@@ -1,4 +1,4 @@
-import socket
+﻿import socket
 import json
 
 
@@ -45,12 +45,12 @@ def main():
 
         print("Connected to server.")
 
-        # 1. LOGIN
+        # LOGIN AS USER1
         send_json(
             client_socket,
             {
                 "type": "LOGIN",
-                "username": "user2",
+                "username": "user1",
                 "password": "123456"
             }
         )
@@ -69,22 +69,90 @@ def main():
 
         token = login_response["token"]
 
-        # 2. SEARCH USER
+        # GET CHATS BEFORE READ
         send_json(
             client_socket,
             {
-                "type": "SEARCH_USER",
-                "token": token,
-                "query": "user"
+                "type": "GET_CHATS",
+                "token": token
             }
         )
 
-        search_response = receive_json(client_socket)
+        chats_before = receive_json(client_socket)
 
-        print("\nSEARCH RESPONSE:")
-        print(search_response)
+        print("\nCHATS BEFORE READ:")
+        print(chats_before)
 
-        # 3. LOGOUT
+        if (
+            chats_before is None
+            or chats_before.get("status") != "OK"
+            or not chats_before.get("chats")
+        ):
+            print("No chats found.")
+            return
+
+        chat_id = chats_before["chats"][0]["chat_id"]
+
+        # GET HISTORY BEFORE READ
+        send_json(
+            client_socket,
+            {
+                "type": "GET_HISTORY",
+                "token": token,
+                "chat_id": chat_id
+            }
+        )
+
+        history_before = receive_json(client_socket)
+
+        print("\nHISTORY BEFORE READ:")
+        print(history_before)
+
+        # MARK AS READ
+        send_json(
+            client_socket,
+            {
+                "type": "MARK_AS_READ",
+                "token": token,
+                "chat_id": chat_id
+            }
+        )
+
+        read_response = receive_json(client_socket)
+
+        print("\nMARK AS READ RESPONSE:")
+        print(read_response)
+
+        # GET HISTORY AFTER READ
+        send_json(
+            client_socket,
+            {
+                "type": "GET_HISTORY",
+                "token": token,
+                "chat_id": chat_id
+            }
+        )
+
+        history_after = receive_json(client_socket)
+
+        print("\nHISTORY AFTER READ:")
+        print(history_after)
+
+        # GET CHATS AFTER READ
+        send_json(
+            client_socket,
+            {
+                "type": "GET_CHATS",
+                "token": token
+            }
+        )
+
+        chats_after = receive_json(client_socket)
+
+        print("\nCHATS AFTER READ:")
+        print(chats_after)
+
+        # LOGOUT
         send_json(
             client_socket,
             {

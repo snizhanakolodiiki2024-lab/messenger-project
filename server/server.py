@@ -14,7 +14,11 @@ from database.db import (
     authenticate_user,
     close_session,
     get_session,
-    search_users
+    search_users,
+    get_user_chats,
+    save_message,
+    get_chat_history,
+    mark_messages_as_read
 )
 
 
@@ -73,40 +77,28 @@ def handle_client(client_socket, client_address):
                         )
 
                     elif request_type == "REGISTER":
-                        username = request.get("username")
-                        display_name = request.get("display_name")
-                        password = request.get("password")
-
                         result = create_user(
-                            username=username,
-                            display_name=display_name,
-                            password=password
+                            username=request.get("username"),
+                            display_name=request.get("display_name"),
+                            password=request.get("password")
                         )
 
-                        if result["success"]:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "OK",
-                                    "message": result["message"]
-                                }
-                            )
-                        else:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": result["message"]
-                                }
-                            )
+                        send_json(
+                            client_socket,
+                            {
+                                "status": (
+                                    "OK"
+                                    if result["success"]
+                                    else "ERROR"
+                                ),
+                                "message": result["message"]
+                            }
+                        )
 
                     elif request_type == "LOGIN":
-                        username = request.get("username")
-                        password = request.get("password")
-
                         result = authenticate_user(
-                            username=username,
-                            password=password
+                            username=request.get("username"),
+                            password=request.get("password")
                         )
 
                         if result["success"]:
@@ -165,18 +157,6 @@ def handle_client(client_socket, client_address):
 
                     elif request_type == "SEARCH_USER":
                         token = request.get("token")
-                        search_text = request.get("query", "")
-
-                        if not token:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Token is required."
-                                }
-                            )
-                            continue
-
                         session = get_session(token)
 
                         if session is None:
@@ -190,7 +170,7 @@ def handle_client(client_socket, client_address):
                             continue
 
                         users = search_users(
-                            search_text=search_text,
+                            search_text=request.get("query", ""),
                             current_user_id=session["UserId"]
                         )
 
@@ -201,6 +181,144 @@ def handle_client(client_socket, client_address):
                                 "users": users
                             }
                         )
+
+                    elif request_type == "GET_CHATS":
+                        token = request.get("token")
+                        session = get_session(token)
+
+                        if session is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": "Недійсна або завершена сесія."
+                                }
+                            )
+                            continue
+
+                        chats = get_user_chats(
+                            session["UserId"]
+                        )
+
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "OK",
+                                "chats": chats
+                            }
+                        )
+
+                    elif request_type == "SEND_MESSAGE":
+                        token = request.get("token")
+                        session = get_session(token)
+
+                        if session is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": "Недійсна або завершена сесія."
+                                }
+                            )
+                            continue
+
+                        result = save_message(
+                            sender_id=session["UserId"],
+                            recipient_id=request.get("recipient_id"),
+                            text=request.get("text")
+                        )
+
+                        if result["success"]:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "message": result["message"],
+                                    "message_data": result["message_data"]
+                                }
+                            )
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": result["message"]
+                                }
+                            )
+
+                    elif request_type == "GET_HISTORY":
+                        token = request.get("token")
+                        session = get_session(token)
+
+                        if session is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": "Недійсна або завершена сесія."
+                                }
+                            )
+                            continue
+
+                        result = get_chat_history(
+                            user_id=session["UserId"],
+                            chat_id=request.get("chat_id")
+                        )
+
+                        if result["success"]:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "messages": result["messages"]
+                                }
+                            )
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": result["message"]
+                                }
+                            )
+
+                    elif request_type == "MARK_AS_READ":
+                        token = request.get("token")
+                        session = get_session(token)
+
+                        if session is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": "Недійсна або завершена сесія."
+                                }
+                            )
+                            continue
+
+                        result = mark_messages_as_read(
+                            user_id=session["UserId"],
+                            chat_id=request.get("chat_id")
+                        )
+
+                        if result["success"]:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "message": result["message"],
+                                    "updated_count": result["updated_count"],
+                                    "read_at": result["read_at"]
+                                }
+                            )
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": result["message"]
+                                }
+                            )
 
                     else:
                         send_json(

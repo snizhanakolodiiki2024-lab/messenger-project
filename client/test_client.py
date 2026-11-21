@@ -34,143 +34,219 @@ def receive_json(client_socket):
             return json.loads(message)
 
 
-def main():
+def connect_to_server():
     client_socket = socket.socket(
         socket.AF_INET,
         socket.SOCK_STREAM
     )
 
-    try:
-        client_socket.connect((HOST, PORT))
+    client_socket.connect((HOST, PORT))
 
-        print("Connected to server.")
+    return client_socket
 
-        # LOGIN AS USER1
-        send_json(
-            client_socket,
-            {
-                "type": "LOGIN",
-                "username": "user1",
-                "password": "123456"
-            }
-        )
 
-        login_response = receive_json(client_socket)
+def login(client_socket, username, password):
+    send_json(
+        client_socket,
+        {
+            "type": "LOGIN",
+            "username": username,
+            "password": password
+        }
+    )
 
-        print("\nLOGIN RESPONSE:")
-        print(login_response)
+    return receive_json(client_socket)
 
-        if (
-            login_response is None
-            or login_response.get("status") != "OK"
-        ):
-            print("Login failed.")
-            return
 
-        token = login_response["token"]
+def logout(client_socket, token):
+    send_json(
+        client_socket,
+        {
+            "type": "LOGOUT",
+            "token": token
+        }
+    )
 
-        # GET CHATS BEFORE READ
-        send_json(
-            client_socket,
-            {
-                "type": "GET_CHATS",
-                "token": token
-            }
-        )
+    return receive_json(client_socket)
 
-        chats_before = receive_json(client_socket)
 
-        print("\nCHATS BEFORE READ:")
-        print(chats_before)
+def main():
+    # ==================================================
+    # USER2 SENDS NEW MESSAGE TO USER1
+    # ==================================================
 
-        if (
-            chats_before is None
-            or chats_before.get("status") != "OK"
-            or not chats_before.get("chats")
-        ):
-            print("No chats found.")
-            return
+    user2_socket = connect_to_server()
 
-        chat_id = chats_before["chats"][0]["chat_id"]
+    print("USER2 CONNECTED")
 
-        # GET HISTORY BEFORE READ
-        send_json(
-            client_socket,
-            {
-                "type": "GET_HISTORY",
-                "token": token,
-                "chat_id": chat_id
-            }
-        )
+    user2_login = login(
+        user2_socket,
+        "user2",
+        "123456"
+    )
 
-        history_before = receive_json(client_socket)
+    print("\nUSER2 LOGIN:")
+    print(user2_login)
 
-        print("\nHISTORY BEFORE READ:")
-        print(history_before)
+    if user2_login.get("status") != "OK":
+        user2_socket.close()
+        return
 
-        # MARK AS READ
-        send_json(
-            client_socket,
-            {
-                "type": "MARK_AS_READ",
-                "token": token,
-                "chat_id": chat_id
-            }
-        )
+    user2_token = user2_login["token"]
 
-        read_response = receive_json(client_socket)
+    send_json(
+        user2_socket,
+        {
+            "type": "SEND_MESSAGE",
+            "token": user2_token,
+            "recipient_id": 1,
+            "text": "Нове повідомлення перед очищенням."
+        }
+    )
 
-        print("\nMARK AS READ RESPONSE:")
-        print(read_response)
+    send_response = receive_json(user2_socket)
 
-        # GET HISTORY AFTER READ
-        send_json(
-            client_socket,
-            {
-                "type": "GET_HISTORY",
-                "token": token,
-                "chat_id": chat_id
-            }
-        )
+    print("\nSEND MESSAGE:")
+    print(send_response)
 
-        history_after = receive_json(client_socket)
+    if send_response.get("status") != "OK":
+        user2_socket.close()
+        return
 
-        print("\nHISTORY AFTER READ:")
-        print(history_after)
+    chat_id = send_response["message_data"]["chat_id"]
 
-        # GET CHATS AFTER READ
-        send_json(
-            client_socket,
-            {
-                "type": "GET_CHATS",
-                "token": token
-            }
-        )
+    user2_logout = logout(
+        user2_socket,
+        user2_token
+    )
 
-        chats_after = receive_json(client_socket)
+    print("\nUSER2 LOGOUT:")
+    print(user2_logout)
 
-        print("\nCHATS AFTER READ:")
-        print(chats_after)
+    user2_socket.close()
 
-        # LOGOUT
-        send_json(
-            client_socket,
-            {
-                "type": "LOGOUT",
-                "token": token
-            }
-        )
+    # ==================================================
+    # USER1 OPENS CHAT
+    # ==================================================
 
-        logout_response = receive_json(client_socket)
+    user1_socket = connect_to_server()
 
-        print("\nLOGOUT RESPONSE:")
-        print(logout_response)
+    print("\nUSER1 CONNECTED")
 
-    except ConnectionRefusedError:
-        print("Could not connect to server.")
+    user1_login = login(
+        user1_socket,
+        "user1",
+        "123456"
+    )
 
-    finally:
-        client_socket.close()
+    print("\nUSER1 LOGIN:")
+    print(user1_login)
+
+    if user1_login.get("status") != "OK":
+        user1_socket.close()
+        return
+
+    user1_token = user1_login["token"]
+
+    # HISTORY BEFORE CLEAR
+    send_json(
+        user1_socket,
+        {
+            "type": "GET_HISTORY",
+            "token": user1_token,
+            "chat_id": chat_id
+        }
+    )
+
+    history_before = receive_json(user1_socket)
+
+    print("\nUSER1 HISTORY BEFORE CLEAR:")
+    print(history_before)
+
+    # CLEAR CHAT
+    send_json(
+        user1_socket,
+        {
+            "type": "CLEAR_CHAT",
+            "token": user1_token,
+            "chat_id": chat_id
+        }
+    )
+
+    clear_response = receive_json(user1_socket)
+
+    print("\nCLEAR CHAT RESPONSE:")
+    print(clear_response)
+
+    # HISTORY AFTER CLEAR
+    send_json(
+        user1_socket,
+        {
+            "type": "GET_HISTORY",
+            "token": user1_token,
+            "chat_id": chat_id
+        }
+    )
+
+    history_after = receive_json(user1_socket)
+
+    print("\nUSER1 HISTORY AFTER CLEAR:")
+    print(history_after)
+
+    user1_logout = logout(
+        user1_socket,
+        user1_token
+    )
+
+    print("\nUSER1 LOGOUT:")
+    print(user1_logout)
+
+    user1_socket.close()
+
+    # ==================================================
+    # USER2 CHECKS THAT HIS HISTORY STILL EXISTS
+    # ==================================================
+
+    user2_socket = connect_to_server()
+
+    user2_login = login(
+        user2_socket,
+        "user2",
+        "123456"
+    )
+
+    print("\nUSER2 SECOND LOGIN:")
+    print(user2_login)
+
+    if user2_login.get("status") != "OK":
+        user2_socket.close()
+        return
+
+    user2_token = user2_login["token"]
+
+    send_json(
+        user2_socket,
+        {
+            "type": "GET_HISTORY",
+            "token": user2_token,
+            "chat_id": chat_id
+        }
+    )
+
+    user2_history = receive_json(user2_socket)
+
+    print("\nUSER2 HISTORY AFTER USER1 CLEARED CHAT:")
+    print(user2_history)
+
+    user2_logout = logout(
+        user2_socket,
+        user2_token
+    )
+
+    print("\nUSER2 FINAL LOGOUT:")
+    print(user2_logout)
+
+    user2_socket.close()
 
 
 if __name__ == "__main__":

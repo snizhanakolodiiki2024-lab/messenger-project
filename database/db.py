@@ -638,5 +638,127 @@ def mark_messages_as_read(user_id, chat_id):
     }
 
 
+def delete_message(user_id, message_id):
+    try:
+        message_id = int(message_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор повідомлення."
+        }
+
+    with get_connection() as connection:
+        message = connection.execute(
+            """
+            SELECT
+                MessageId,
+                ChatId,
+                SenderId,
+                IsDeleted
+            FROM Messages
+            WHERE MessageId = ?
+            """,
+            (message_id,)
+        ).fetchone()
+
+        if message is None:
+            return {
+                "success": False,
+                "message": "Повідомлення не знайдено."
+            }
+
+        if message["SenderId"] != user_id:
+            return {
+                "success": False,
+                "message": "Можна видаляти лише власні повідомлення."
+            }
+
+        if message["IsDeleted"] == 1:
+            return {
+                "success": False,
+                "message": "Повідомлення вже видалено."
+            }
+
+        connection.execute(
+            """
+            UPDATE Messages
+            SET IsDeleted = 1
+            WHERE
+                MessageId = ?
+                AND SenderId = ?
+            """,
+            (
+                message_id,
+                user_id
+            )
+        )
+
+    return {
+        "success": True,
+        "message": "Повідомлення успішно видалено.",
+        "message_id": message_id,
+        "chat_id": message["ChatId"]
+    }
+
+
+def clear_chat(user_id, chat_id):
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор чату."
+        }
+
+    with get_connection() as connection:
+        membership = connection.execute(
+            """
+            SELECT 1
+            FROM ChatMembers
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        ).fetchone()
+
+        if membership is None:
+            return {
+                "success": False,
+                "message": "Користувач не має доступу до цього чату."
+            }
+
+        cleared_at = connection.execute(
+            """
+            SELECT datetime('now')
+            """
+        ).fetchone()[0]
+
+        connection.execute(
+            """
+            UPDATE ChatMembers
+            SET ClearedAt = ?
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            """,
+            (
+                cleared_at,
+                chat_id,
+                user_id
+            )
+        )
+
+    return {
+        "success": True,
+        "message": "Переписку успішно очищено.",
+        "chat_id": chat_id,
+        "cleared_at": cleared_at
+    }
+
+
 if __name__ == "__main__":
     initialize_database()

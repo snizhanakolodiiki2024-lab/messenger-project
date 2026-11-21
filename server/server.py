@@ -18,7 +18,9 @@ from database.db import (
     get_user_chats,
     save_message,
     get_chat_history,
-    mark_messages_as_read
+    mark_messages_as_read,
+    delete_message,
+    clear_chat
 )
 
 
@@ -309,6 +311,82 @@ def handle_client(client_socket, client_address):
                                     "message": result["message"],
                                     "updated_count": result["updated_count"],
                                     "read_at": result["read_at"]
+                                }
+                            )
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": result["message"]
+                                }
+                            )
+
+                    elif request_type == "DELETE_MESSAGE":
+                        token = request.get("token")
+                        session = get_session(token)
+
+                        if session is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": "Недійсна або завершена сесія."
+                                }
+                            )
+                            continue
+
+                        result = delete_message(
+                            user_id=session["UserId"],
+                            message_id=request.get("message_id")
+                        )
+
+                        if result["success"]:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "message": result["message"],
+                                    "message_id": result["message_id"],
+                                    "chat_id": result["chat_id"]
+                                }
+                            )
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": result["message"]
+                                }
+                            )
+
+                    elif request_type == "CLEAR_CHAT":
+                        token = request.get("token")
+                        session = get_session(token)
+
+                        if session is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": "Недійсна або завершена сесія."
+                                }
+                            )
+                            continue
+
+                        result = clear_chat(
+                            user_id=session["UserId"],
+                            chat_id=request.get("chat_id")
+                        )
+
+                        if result["success"]:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "message": result["message"],
+                                    "chat_id": result["chat_id"],
+                                    "cleared_at": result["cleared_at"]
                                 }
                             )
                         else:

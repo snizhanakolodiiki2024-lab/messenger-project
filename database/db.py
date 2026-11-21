@@ -14,7 +14,6 @@ def get_connection():
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-
     return connection
 
 
@@ -46,16 +45,26 @@ def hash_password(password, salt=None):
 
 def get_user_by_login(username):
     with get_connection() as connection:
-        cursor = connection.execute(
+        return connection.execute(
             """
             SELECT *
             FROM Users
             WHERE Username = ?
             """,
             (username,)
-        )
+        ).fetchone()
 
-        return cursor.fetchone()
+
+def get_user_by_id(user_id):
+    with get_connection() as connection:
+        return connection.execute(
+            """
+            SELECT *
+            FROM Users
+            WHERE UserId = ?
+            """,
+            (user_id,)
+        ).fetchone()
 
 
 def create_user(username, display_name, password):
@@ -108,6 +117,49 @@ def create_user(username, display_name, password):
         }
 
 
+def create_admin_user(username, display_name, password):
+    if not username or not display_name or not password:
+        return {
+            "success": False,
+            "message": "Усі поля повинні бути заповнені."
+        }
+
+    if get_user_by_login(username) is not None:
+        return {
+            "success": False,
+            "message": "Користувач з таким логіном уже існує."
+        }
+
+    password_hash, password_salt = hash_password(password)
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO Users (
+                Username,
+                DisplayName,
+                PasswordHash,
+                PasswordSalt,
+                Role,
+                IsBlocked,
+                IsDeleted
+            )
+            VALUES (?, ?, ?, ?, 'ADMIN', 0, 0)
+            """,
+            (
+                username,
+                display_name,
+                password_hash,
+                password_salt
+            )
+        )
+
+    return {
+        "success": True,
+        "message": "Обліковий запис адміністратора створено."
+    }
+
+
 def authenticate_user(username, password):
     user = get_user_by_login(username)
 
@@ -143,7 +195,9 @@ def authenticate_user(username, password):
             "message": "Неправильний пароль."
         }
 
-    session_token = create_session(user["UserId"])
+    session_token = create_session(
+        user["UserId"]
+    )
 
     return {
         "success": True,
@@ -180,7 +234,7 @@ def get_session(token):
         return None
 
     with get_connection() as connection:
-        cursor = connection.execute(
+        return connection.execute(
             """
             SELECT *
             FROM Sessions
@@ -188,9 +242,7 @@ def get_session(token):
               AND IsActive = 1
             """,
             (token,)
-        )
-
-        return cursor.fetchone()
+        ).fetchone()
 
 
 def close_session(token):
@@ -215,7 +267,7 @@ def search_users(search_text, current_user_id):
     search_pattern = f"%{search_text}%"
 
     with get_connection() as connection:
-        cursor = connection.execute(
+        users = connection.execute(
             """
             SELECT
                 UserId,
@@ -238,9 +290,7 @@ def search_users(search_text, current_user_id):
                 search_pattern,
                 search_pattern
             )
-        )
-
-        users = cursor.fetchall()
+        ).fetchall()
 
     return [
         {
@@ -254,7 +304,7 @@ def search_users(search_text, current_user_id):
 
 def get_user_chats(user_id):
     with get_connection() as connection:
-        cursor = connection.execute(
+        chats = connection.execute(
             """
             SELECT
                 c.ChatId,
@@ -328,9 +378,7 @@ def get_user_chats(user_id):
                 user_id,
                 user_id
             )
-        )
-
-        chats = cursor.fetchall()
+        ).fetchall()
 
     return [
         {
@@ -417,27 +465,37 @@ def save_message(sender_id, recipient_id, text):
 
         if chat is None:
             cursor = connection.execute(
-                """
-                INSERT INTO Chats DEFAULT VALUES
-                """
+                "INSERT INTO Chats DEFAULT VALUES"
             )
 
             chat_id = cursor.lastrowid
 
             connection.execute(
                 """
-                INSERT INTO ChatMembers (ChatId, UserId)
+                INSERT INTO ChatMembers (
+                    ChatId,
+                    UserId
+                )
                 VALUES (?, ?)
                 """,
-                (chat_id, sender_id)
+                (
+                    chat_id,
+                    sender_id
+                )
             )
 
             connection.execute(
                 """
-                INSERT INTO ChatMembers (ChatId, UserId)
+                INSERT INTO ChatMembers (
+                    ChatId,
+                    UserId
+                )
                 VALUES (?, ?)
                 """,
-                (chat_id, recipient_id)
+                (
+                    chat_id,
+                    recipient_id
+                )
             )
 
         else:
@@ -519,7 +577,7 @@ def get_chat_history(user_id, chat_id):
 
         cleared_at = membership["ClearedAt"]
 
-        cursor = connection.execute(
+        messages = connection.execute(
             """
             SELECT
                 m.MessageId,
@@ -553,9 +611,7 @@ def get_chat_history(user_id, chat_id):
                 cleared_at,
                 cleared_at
             )
-        )
-
-        messages = cursor.fetchall()
+        ).fetchall()
 
     return {
         "success": True,
@@ -606,9 +662,7 @@ def mark_messages_as_read(user_id, chat_id):
             }
 
         read_at = connection.execute(
-            """
-            SELECT datetime('now')
-            """
+            "SELECT datetime('now')"
         ).fetchone()[0]
 
         cursor = connection.execute(
@@ -732,9 +786,7 @@ def clear_chat(user_id, chat_id):
             }
 
         cleared_at = connection.execute(
-            """
-            SELECT datetime('now')
-            """
+            "SELECT datetime('now')"
         ).fetchone()[0]
 
         connection.execute(
@@ -757,6 +809,265 @@ def clear_chat(user_id, chat_id):
         "message": "Переписку успішно очищено.",
         "chat_id": chat_id,
         "cleared_at": cleared_at
+    }
+
+
+def get_all_users():
+    with get_connection() as connection:
+        users = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                DisplayName,
+                Role,
+                IsBlocked,
+                IsDeleted,
+                CreatedAt
+            FROM Users
+            ORDER BY UserId
+            """
+        ).fetchall()
+
+    return [
+        {
+            "user_id": user["UserId"],
+            "username": user["Username"],
+            "display_name": user["DisplayName"],
+            "role": user["Role"],
+            "is_blocked": user["IsBlocked"],
+            "is_deleted": user["IsDeleted"],
+            "created_at": user["CreatedAt"]
+        }
+        for user in users
+    ]
+
+
+def block_user(admin_user_id, target_user_id):
+    try:
+        target_user_id = int(target_user_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор користувача."
+        }
+
+    if admin_user_id == target_user_id:
+        return {
+            "success": False,
+            "message": "Адміністратор не може заблокувати власний обліковий запис."
+        }
+
+    with get_connection() as connection:
+        user = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                Role,
+                IsBlocked,
+                IsDeleted
+            FROM Users
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        ).fetchone()
+
+        if user is None:
+            return {
+                "success": False,
+                "message": "Користувача не знайдено."
+            }
+
+        if user["Role"] == "ADMIN":
+            return {
+                "success": False,
+                "message": "Блокування адміністратора недоступне."
+            }
+
+        if user["IsDeleted"] == 1:
+            return {
+                "success": False,
+                "message": "Обліковий запис уже видалено."
+            }
+
+        if user["IsBlocked"] == 1:
+            return {
+                "success": False,
+                "message": "Користувач уже заблокований."
+            }
+
+        connection.execute(
+            """
+            UPDATE Users
+            SET IsBlocked = 1
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        )
+
+        connection.execute(
+            """
+            UPDATE Sessions
+            SET IsActive = 0
+            WHERE
+                UserId = ?
+                AND IsActive = 1
+            """,
+            (target_user_id,)
+        )
+
+    return {
+        "success": True,
+        "message": "Користувача успішно заблоковано.",
+        "user_id": target_user_id,
+        "username": user["Username"]
+    }
+
+
+def unblock_user(admin_user_id, target_user_id):
+    try:
+        target_user_id = int(target_user_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор користувача."
+        }
+
+    if admin_user_id == target_user_id:
+        return {
+            "success": False,
+            "message": "Операція для власного облікового запису недоступна."
+        }
+
+    with get_connection() as connection:
+        user = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                Role,
+                IsBlocked,
+                IsDeleted
+            FROM Users
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        ).fetchone()
+
+        if user is None:
+            return {
+                "success": False,
+                "message": "Користувача не знайдено."
+            }
+
+        if user["Role"] == "ADMIN":
+            return {
+                "success": False,
+                "message": "Операція для адміністратора недоступна."
+            }
+
+        if user["IsDeleted"] == 1:
+            return {
+                "success": False,
+                "message": "Обліковий запис видалено."
+            }
+
+        if user["IsBlocked"] == 0:
+            return {
+                "success": False,
+                "message": "Користувач не заблокований."
+            }
+
+        connection.execute(
+            """
+            UPDATE Users
+            SET IsBlocked = 0
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        )
+
+    return {
+        "success": True,
+        "message": "Користувача успішно розблоковано.",
+        "user_id": target_user_id,
+        "username": user["Username"]
+    }
+
+
+def delete_user(admin_user_id, target_user_id):
+    try:
+        target_user_id = int(target_user_id)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "message": "Некоректний ідентифікатор користувача."
+        }
+
+    if admin_user_id == target_user_id:
+        return {
+            "success": False,
+            "message": "Адміністратор не може видалити власний обліковий запис."
+        }
+
+    with get_connection() as connection:
+        user = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                Role,
+                IsDeleted
+            FROM Users
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        ).fetchone()
+
+        if user is None:
+            return {
+                "success": False,
+                "message": "Користувача не знайдено."
+            }
+
+        if user["Role"] == "ADMIN":
+            return {
+                "success": False,
+                "message": "Видалення облікового запису адміністратора недоступне."
+            }
+
+        if user["IsDeleted"] == 1:
+            return {
+                "success": False,
+                "message": "Обліковий запис уже видалено."
+            }
+
+        connection.execute(
+            """
+            UPDATE Users
+            SET IsDeleted = 1
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        )
+
+        connection.execute(
+            """
+            UPDATE Sessions
+            SET IsActive = 0
+            WHERE
+                UserId = ?
+                AND IsActive = 1
+            """,
+            (target_user_id,)
+        )
+
+    return {
+        "success": True,
+        "message": "Обліковий запис користувача успішно видалено.",
+        "user_id": target_user_id,
+        "username": user["Username"]
     }
 
 

@@ -1,5 +1,6 @@
 ﻿import socket
 import json
+import time
 
 
 HOST = "127.0.0.1"
@@ -29,9 +30,14 @@ def receive_json(client_socket):
         buffer += data.decode("utf-8")
 
         if "\n" in buffer:
-            message, _ = buffer.split("\n", 1)
+            message, _ = buffer.split(
+                "\n",
+                1
+            )
 
-            return json.loads(message)
+            return json.loads(
+                message
+            )
 
 
 def connect_to_server():
@@ -40,12 +46,18 @@ def connect_to_server():
         socket.SOCK_STREAM
     )
 
-    client_socket.connect((HOST, PORT))
+    client_socket.connect(
+        (HOST, PORT)
+    )
 
     return client_socket
 
 
-def login(client_socket, username, password):
+def login(
+    client_socket,
+    username,
+    password
+):
     send_json(
         client_socket,
         {
@@ -55,10 +67,15 @@ def login(client_socket, username, password):
         }
     )
 
-    return receive_json(client_socket)
+    return receive_json(
+        client_socket
+    )
 
 
-def logout(client_socket, token):
+def logout(
+    client_socket,
+    token
+):
     send_json(
         client_socket,
         {
@@ -67,186 +84,227 @@ def logout(client_socket, token):
         }
     )
 
-    return receive_json(client_socket)
+    return receive_json(
+        client_socket
+    )
 
 
 def main():
-    # ==================================================
-    # USER2 SENDS NEW MESSAGE TO USER1
-    # ==================================================
-
-    user2_socket = connect_to_server()
-
-    print("USER2 CONNECTED")
-
-    user2_login = login(
-        user2_socket,
-        "user2",
-        "123456"
+    test_username = (
+        f"delete_test_{int(time.time())}"
     )
 
-    print("\nUSER2 LOGIN:")
-    print(user2_login)
+    test_password = "123456"
 
-    if user2_login.get("status") != "OK":
-        user2_socket.close()
+    # ==========================================
+    # CREATE TEMPORARY USER
+    # ==========================================
+
+    test_socket = connect_to_server()
+
+    send_json(
+        test_socket,
+        {
+            "type": "REGISTER",
+            "username": test_username,
+            "display_name": "Delete Test User",
+            "password": test_password
+        }
+    )
+
+    register_response = receive_json(
+        test_socket
+    )
+
+    print(
+        "\nTEST USER REGISTER:"
+    )
+
+    print(
+        register_response
+    )
+
+    if (
+        register_response is None
+        or register_response.get("status")
+        != "OK"
+    ):
+        test_socket.close()
         return
 
-    user2_token = user2_login["token"]
+    # ==========================================
+    # LOGIN AS TEMPORARY USER
+    # ==========================================
 
-    send_json(
-        user2_socket,
-        {
-            "type": "SEND_MESSAGE",
-            "token": user2_token,
-            "recipient_id": 1,
-            "text": "Нове повідомлення перед очищенням."
-        }
+    test_login = login(
+        test_socket,
+        test_username,
+        test_password
     )
 
-    send_response = receive_json(user2_socket)
+    print(
+        "\nTEST USER LOGIN:"
+    )
 
-    print("\nSEND MESSAGE:")
-    print(send_response)
+    print(
+        test_login
+    )
 
-    if send_response.get("status") != "OK":
-        user2_socket.close()
+    if test_login.get("status") != "OK":
+        test_socket.close()
         return
 
-    chat_id = send_response["message_data"]["chat_id"]
+    test_user_id = test_login["user_id"]
+    test_token = test_login["token"]
 
-    user2_logout = logout(
-        user2_socket,
-        user2_token
+    print(
+        "\nTEST USER ID:"
     )
 
-    print("\nUSER2 LOGOUT:")
-    print(user2_logout)
-
-    user2_socket.close()
-
-    # ==================================================
-    # USER1 OPENS CHAT
-    # ==================================================
-
-    user1_socket = connect_to_server()
-
-    print("\nUSER1 CONNECTED")
-
-    user1_login = login(
-        user1_socket,
-        "user1",
-        "123456"
+    print(
+        test_user_id
     )
 
-    print("\nUSER1 LOGIN:")
-    print(user1_login)
+    # ==========================================
+    # ADMIN LOGIN
+    # ==========================================
 
-    if user1_login.get("status") != "OK":
-        user1_socket.close()
+    admin_socket = connect_to_server()
+
+    admin_login = login(
+        admin_socket,
+        "admin1",
+        "admin123"
+    )
+
+    print(
+        "\nADMIN LOGIN:"
+    )
+
+    print(
+        admin_login
+    )
+
+    if admin_login.get("status") != "OK":
+        admin_socket.close()
+        test_socket.close()
         return
 
-    user1_token = user1_login["token"]
+    admin_token = admin_login["token"]
 
-    # HISTORY BEFORE CLEAR
+    # ==========================================
+    # DELETE TEMPORARY USER
+    # ==========================================
+
     send_json(
-        user1_socket,
+        admin_socket,
         {
-            "type": "GET_HISTORY",
-            "token": user1_token,
-            "chat_id": chat_id
+            "type": "DELETE_USER",
+            "token": admin_token,
+            "user_id": test_user_id
         }
     )
 
-    history_before = receive_json(user1_socket)
+    delete_response = receive_json(
+        admin_socket
+    )
 
-    print("\nUSER1 HISTORY BEFORE CLEAR:")
-    print(history_before)
+    print(
+        "\nDELETE USER RESPONSE:"
+    )
 
-    # CLEAR CHAT
+    print(
+        delete_response
+    )
+
+    # ==========================================
+    # OLD TOKEN MUST NO LONGER WORK
+    # ==========================================
+
     send_json(
-        user1_socket,
+        test_socket,
         {
-            "type": "CLEAR_CHAT",
-            "token": user1_token,
-            "chat_id": chat_id
+            "type": "GET_CHATS",
+            "token": test_token
         }
     )
 
-    clear_response = receive_json(user1_socket)
+    old_session_response = receive_json(
+        test_socket
+    )
 
-    print("\nCLEAR CHAT RESPONSE:")
-    print(clear_response)
+    print(
+        "\nOLD SESSION AFTER DELETE:"
+    )
 
-    # HISTORY AFTER CLEAR
+    print(
+        old_session_response
+    )
+
+    test_socket.close()
+
+    # ==========================================
+    # TRY LOGIN AGAIN
+    # ==========================================
+
+    second_test_socket = connect_to_server()
+
+    login_after_delete = login(
+        second_test_socket,
+        test_username,
+        test_password
+    )
+
+    print(
+        "\nLOGIN AFTER DELETE:"
+    )
+
+    print(
+        login_after_delete
+    )
+
+    second_test_socket.close()
+
+    # ==========================================
+    # ADMIN GET USERS
+    # ==========================================
+
     send_json(
-        user1_socket,
+        admin_socket,
         {
-            "type": "GET_HISTORY",
-            "token": user1_token,
-            "chat_id": chat_id
+            "type": "GET_USERS",
+            "token": admin_token
         }
     )
 
-    history_after = receive_json(user1_socket)
-
-    print("\nUSER1 HISTORY AFTER CLEAR:")
-    print(history_after)
-
-    user1_logout = logout(
-        user1_socket,
-        user1_token
+    users_response = receive_json(
+        admin_socket
     )
 
-    print("\nUSER1 LOGOUT:")
-    print(user1_logout)
-
-    user1_socket.close()
-
-    # ==================================================
-    # USER2 CHECKS THAT HIS HISTORY STILL EXISTS
-    # ==================================================
-
-    user2_socket = connect_to_server()
-
-    user2_login = login(
-        user2_socket,
-        "user2",
-        "123456"
+    print(
+        "\nUSERS AFTER DELETE:"
     )
 
-    print("\nUSER2 SECOND LOGIN:")
-    print(user2_login)
-
-    if user2_login.get("status") != "OK":
-        user2_socket.close()
-        return
-
-    user2_token = user2_login["token"]
-
-    send_json(
-        user2_socket,
-        {
-            "type": "GET_HISTORY",
-            "token": user2_token,
-            "chat_id": chat_id
-        }
+    print(
+        users_response
     )
 
-    user2_history = receive_json(user2_socket)
+    # ==========================================
+    # ADMIN LOGOUT
+    # ==========================================
 
-    print("\nUSER2 HISTORY AFTER USER1 CLEARED CHAT:")
-    print(user2_history)
-
-    user2_logout = logout(
-        user2_socket,
-        user2_token
+    print(
+        "\nADMIN LOGOUT:"
     )
 
-    print("\nUSER2 FINAL LOGOUT:")
-    print(user2_logout)
+    print(
+        logout(
+            admin_socket,
+            admin_token
+        )
+    )
 
-    user2_socket.close()
+    admin_socket.close()
 
 
 if __name__ == "__main__":

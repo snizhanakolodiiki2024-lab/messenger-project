@@ -25,7 +25,8 @@ from database.db import (
     get_all_users,
     block_user,
     unblock_user,
-    delete_user
+    delete_user,
+    get_audit_log
 )
 
 
@@ -33,7 +34,10 @@ HOST = "127.0.0.1"
 PORT = 5000
 
 
-def send_json(client_socket, data):
+def send_json(
+    client_socket,
+    data
+):
     message = json.dumps(
         data,
         ensure_ascii=False
@@ -50,24 +54,44 @@ def get_authenticated_user(token):
     if session is None:
         return None
 
-    return get_user_by_id(
+    user = get_user_by_id(
         session["UserId"]
     )
+
+    if user is None:
+        return None
+
+    if user["IsDeleted"] == 1:
+        return None
+
+    if user["IsBlocked"] == 1:
+        return None
+
+    return user
 
 
 def get_admin_user(token):
     user = get_authenticated_user(token)
 
     if user is None:
-        return None, "Недійсна або завершена сесія."
+        return (
+            None,
+            "Недійсна або завершена сесія."
+        )
 
     if user["Role"] != "ADMIN":
-        return None, "Недостатньо прав доступу."
+        return (
+            None,
+            "Недостатньо прав доступу."
+        )
 
     return user, None
 
 
-def send_result(client_socket, result):
+def send_result(
+    client_socket,
+    result
+):
     send_json(
         client_socket,
         {
@@ -78,15 +102,21 @@ def send_result(client_socket, result):
             ),
             **{
                 key: value
-                for key, value in result.items()
+                for key, value
+                in result.items()
                 if key != "success"
             }
         }
     )
 
 
-def handle_client(client_socket, client_address):
-    print(f"Client connected: {client_address}")
+def handle_client(
+    client_socket,
+    client_address
+):
+    print(
+        f"Client connected: {client_address}"
+    )
 
     buffer = ""
 
@@ -100,20 +130,27 @@ def handle_client(client_socket, client_address):
             buffer += data.decode("utf-8")
 
             while "\n" in buffer:
-                message, buffer = buffer.split("\n", 1)
+                message, buffer = buffer.split(
+                    "\n",
+                    1
+                )
 
                 if not message.strip():
                     continue
 
                 try:
-                    request = json.loads(message)
+                    request = json.loads(
+                        message
+                    )
 
                     print(
                         f"Request from {client_address}:",
                         request
                     )
 
-                    request_type = request.get("type")
+                    request_type = request.get(
+                        "type"
+                    )
 
                     if request_type == "PING":
                         send_json(
@@ -126,9 +163,15 @@ def handle_client(client_socket, client_address):
 
                     elif request_type == "REGISTER":
                         result = create_user(
-                            username=request.get("username"),
-                            display_name=request.get("display_name"),
-                            password=request.get("password")
+                            username=request.get(
+                                "username"
+                            ),
+                            display_name=request.get(
+                                "display_name"
+                            ),
+                            password=request.get(
+                                "password"
+                            )
                         )
 
                         send_result(
@@ -138,8 +181,12 @@ def handle_client(client_socket, client_address):
 
                     elif request_type == "LOGIN":
                         result = authenticate_user(
-                            username=request.get("username"),
-                            password=request.get("password")
+                            username=request.get(
+                                "username"
+                            ),
+                            password=request.get(
+                                "password"
+                            )
                         )
 
                         if result["success"]:
@@ -155,6 +202,7 @@ def handle_client(client_socket, client_address):
                                     "token": result["token"]
                                 }
                             )
+
                         else:
                             send_json(
                                 client_socket,
@@ -165,7 +213,9 @@ def handle_client(client_socket, client_address):
                             )
 
                     elif request_type == "LOGOUT":
-                        token = request.get("token")
+                        token = request.get(
+                            "token"
+                        )
 
                         if close_session(token):
                             send_json(
@@ -175,6 +225,7 @@ def handle_client(client_socket, client_address):
                                     "message": "Сесію успішно завершено."
                                 }
                             )
+
                         else:
                             send_json(
                                 client_socket,
@@ -200,7 +251,10 @@ def handle_client(client_socket, client_address):
                             continue
 
                         users = search_users(
-                            request.get("query", ""),
+                            request.get(
+                                "query",
+                                ""
+                            ),
                             user["UserId"]
                         )
 
@@ -254,8 +308,12 @@ def handle_client(client_socket, client_address):
 
                         result = save_message(
                             sender_id=user["UserId"],
-                            recipient_id=request.get("recipient_id"),
-                            text=request.get("text")
+                            recipient_id=request.get(
+                                "recipient_id"
+                            ),
+                            text=request.get(
+                                "text"
+                            )
                         )
 
                         send_result(
@@ -280,7 +338,9 @@ def handle_client(client_socket, client_address):
 
                         result = get_chat_history(
                             user["UserId"],
-                            request.get("chat_id")
+                            request.get(
+                                "chat_id"
+                            )
                         )
 
                         send_result(
@@ -305,7 +365,9 @@ def handle_client(client_socket, client_address):
 
                         result = mark_messages_as_read(
                             user["UserId"],
-                            request.get("chat_id")
+                            request.get(
+                                "chat_id"
+                            )
                         )
 
                         send_result(
@@ -330,7 +392,9 @@ def handle_client(client_socket, client_address):
 
                         result = delete_message(
                             user["UserId"],
-                            request.get("message_id")
+                            request.get(
+                                "message_id"
+                            )
                         )
 
                         send_result(
@@ -355,7 +419,9 @@ def handle_client(client_socket, client_address):
 
                         result = clear_chat(
                             user["UserId"],
-                            request.get("chat_id")
+                            request.get(
+                                "chat_id"
+                            )
                         )
 
                         send_result(
@@ -403,7 +469,9 @@ def handle_client(client_socket, client_address):
 
                         result = block_user(
                             admin_user_id=admin["UserId"],
-                            target_user_id=request.get("user_id")
+                            target_user_id=request.get(
+                                "user_id"
+                            )
                         )
 
                         send_result(
@@ -428,7 +496,9 @@ def handle_client(client_socket, client_address):
 
                         result = unblock_user(
                             admin_user_id=admin["UserId"],
-                            target_user_id=request.get("user_id")
+                            target_user_id=request.get(
+                                "user_id"
+                            )
                         )
 
                         send_result(
@@ -453,12 +523,44 @@ def handle_client(client_socket, client_address):
 
                         result = delete_user(
                             admin_user_id=admin["UserId"],
-                            target_user_id=request.get("user_id")
+                            target_user_id=request.get(
+                                "user_id"
+                            )
                         )
 
                         send_result(
                             client_socket,
                             result
+                        )
+
+                    elif request_type == "GET_AUDIT_LOG":
+                        admin, error = get_admin_user(
+                            request.get("token")
+                        )
+
+                        if error is not None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": error
+                                }
+                            )
+                            continue
+
+                        logs = get_audit_log(
+                            request.get(
+                                "limit",
+                                100
+                            )
+                        )
+
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "OK",
+                                "logs": logs
+                            }
                         )
 
                     else:

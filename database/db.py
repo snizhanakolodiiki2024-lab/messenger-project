@@ -17,9 +17,50 @@ def get_connection():
     return connection
 
 
+def add_audit_log(
+    connection,
+    user_id,
+    event_type,
+    description
+):
+    connection.execute(
+        """
+        INSERT INTO AuditLog (
+            UserId,
+            EventType,
+            Description
+        )
+        VALUES (?, ?, ?)
+        """,
+        (
+            user_id,
+            event_type,
+            description
+        )
+    )
+
+
+def write_audit_log(
+    user_id,
+    event_type,
+    description
+):
+    with get_connection() as connection:
+        add_audit_log(
+            connection,
+            user_id,
+            event_type,
+            description
+        )
+
+
 def initialize_database():
     with get_connection() as connection:
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as file:
+        with open(
+            SCHEMA_PATH,
+            "r",
+            encoding="utf-8"
+        ) as file:
             schema = file.read()
 
         connection.executescript(schema)
@@ -40,7 +81,10 @@ def hash_password(password, salt=None):
         200000
     )
 
-    return password_hash.hex(), salt_bytes.hex()
+    return (
+        password_hash.hex(),
+        salt_bytes.hex()
+    )
 
 
 def get_user_by_login(username):
@@ -67,7 +111,11 @@ def get_user_by_id(user_id):
         ).fetchone()
 
 
-def create_user(username, display_name, password):
+def create_user(
+    username,
+    display_name,
+    password
+):
     if not username or not display_name or not password:
         return {
             "success": False,
@@ -80,11 +128,13 @@ def create_user(username, display_name, password):
             "message": "Користувач з таким логіном уже існує."
         }
 
-    password_hash, password_salt = hash_password(password)
+    password_hash, password_salt = (
+        hash_password(password)
+    )
 
     try:
         with get_connection() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO Users (
                     Username,
@@ -105,6 +155,18 @@ def create_user(username, display_name, password):
                 )
             )
 
+            user_id = cursor.lastrowid
+
+            add_audit_log(
+                connection,
+                user_id,
+                "REGISTER",
+                (
+                    f"Зареєстровано нового користувача "
+                    f"'{username}'."
+                )
+            )
+
         return {
             "success": True,
             "message": "Користувача успішно зареєстровано."
@@ -117,7 +179,11 @@ def create_user(username, display_name, password):
         }
 
 
-def create_admin_user(username, display_name, password):
+def create_admin_user(
+    username,
+    display_name,
+    password
+):
     if not username or not display_name or not password:
         return {
             "success": False,
@@ -130,10 +196,12 @@ def create_admin_user(username, display_name, password):
             "message": "Користувач з таким логіном уже існує."
         }
 
-    password_hash, password_salt = hash_password(password)
+    password_hash, password_salt = (
+        hash_password(password)
+    )
 
     with get_connection() as connection:
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO Users (
                 Username,
@@ -154,6 +222,18 @@ def create_admin_user(username, display_name, password):
             )
         )
 
+        admin_id = cursor.lastrowid
+
+        add_audit_log(
+            connection,
+            admin_id,
+            "ADMIN_CREATED",
+            (
+                f"Створено обліковий запис "
+                f"адміністратора '{username}'."
+            )
+        )
+
     return {
         "success": True,
         "message": "Обліковий запис адміністратора створено."
@@ -164,18 +244,45 @@ def authenticate_user(username, password):
     user = get_user_by_login(username)
 
     if user is None:
+        write_audit_log(
+            None,
+            "LOGIN_FAILED",
+            (
+                f"Невдала спроба входу. "
+                f"Користувача '{username}' не знайдено."
+            )
+        )
+
         return {
             "success": False,
             "message": "Користувача не знайдено."
         }
 
     if user["IsDeleted"] == 1:
+        write_audit_log(
+            user["UserId"],
+            "LOGIN_FAILED",
+            (
+                f"Спроба входу до видаленого "
+                f"облікового запису '{username}'."
+            )
+        )
+
         return {
             "success": False,
             "message": "Обліковий запис видалено."
         }
 
     if user["IsBlocked"] == 1:
+        write_audit_log(
+            user["UserId"],
+            "LOGIN_FAILED",
+            (
+                f"Спроба входу до заблокованого "
+                f"облікового запису '{username}'."
+            )
+        )
+
         return {
             "success": False,
             "message": "Обліковий запис заблоковано."
@@ -190,6 +297,15 @@ def authenticate_user(username, password):
         entered_hash,
         user["PasswordHash"]
     ):
+        write_audit_log(
+            user["UserId"],
+            "LOGIN_FAILED",
+            (
+                f"Невдала спроба входу користувача "
+                f"'{username}': неправильний пароль."
+            )
+        )
+
         return {
             "success": False,
             "message": "Неправильний пароль."
@@ -197,6 +313,15 @@ def authenticate_user(username, password):
 
     session_token = create_session(
         user["UserId"]
+    )
+
+    write_audit_log(
+        user["UserId"],
+        "LOGIN",
+        (
+            f"Користувач '{username}' "
+            f"успішно увійшов до системи."
+        )
     )
 
     return {
@@ -223,7 +348,10 @@ def create_session(user_id):
             )
             VALUES (?, ?, 1)
             """,
-            (user_id, token)
+            (
+                user_id,
+                token
+            )
         )
 
     return token
@@ -238,29 +366,76 @@ def get_session(token):
             """
             SELECT *
             FROM Sessions
-            WHERE Token = ?
-              AND IsActive = 1
+            WHERE
+                Token = ?
+                AND IsActive = 1
             """,
             (token,)
         ).fetchone()
 
 
 def close_session(token):
+    if not token:
+        return False
+
     with get_connection() as connection:
-        cursor = connection.execute(
+        session = connection.execute(
+            """
+            SELECT
+                SessionId,
+                UserId
+            FROM Sessions
+            WHERE
+                Token = ?
+                AND IsActive = 1
+            """,
+            (token,)
+        ).fetchone()
+
+        if session is None:
+            return False
+
+        connection.execute(
             """
             UPDATE Sessions
             SET IsActive = 0
-            WHERE Token = ?
-              AND IsActive = 1
+            WHERE SessionId = ?
             """,
-            (token,)
+            (session["SessionId"],)
         )
 
-    return cursor.rowcount > 0
+        user = connection.execute(
+            """
+            SELECT Username
+            FROM Users
+            WHERE UserId = ?
+            """,
+            (session["UserId"],)
+        ).fetchone()
+
+        username = (
+            user["Username"]
+            if user is not None
+            else str(session["UserId"])
+        )
+
+        add_audit_log(
+            connection,
+            session["UserId"],
+            "LOGOUT",
+            (
+                f"Користувач '{username}' "
+                f"вийшов із системи."
+            )
+        )
+
+    return True
 
 
-def search_users(search_text, current_user_id):
+def search_users(
+    search_text,
+    current_user_id
+):
     if not search_text:
         return []
 
@@ -323,7 +498,9 @@ def get_user_chats(user_id):
                             current_member.ClearedAt IS NULL
                             OR m.SentAt > current_member.ClearedAt
                         )
-                    ORDER BY m.SentAt DESC, m.MessageId DESC
+                    ORDER BY
+                        m.SentAt DESC,
+                        m.MessageId DESC
                     LIMIT 1
                 ) AS LastMessage,
 
@@ -337,7 +514,9 @@ def get_user_chats(user_id):
                             current_member.ClearedAt IS NULL
                             OR m.SentAt > current_member.ClearedAt
                         )
-                    ORDER BY m.SentAt DESC, m.MessageId DESC
+                    ORDER BY
+                        m.SentAt DESC,
+                        m.MessageId DESC
                     LIMIT 1
                 ) AS LastMessageAt,
 
@@ -372,7 +551,10 @@ def get_user_chats(user_id):
                 AND other_user.IsDeleted = 0
 
             ORDER BY
-                COALESCE(LastMessageAt, c.CreatedAt) DESC
+                COALESCE(
+                    LastMessageAt,
+                    c.CreatedAt
+                ) DESC
             """,
             (
                 user_id,
@@ -394,7 +576,11 @@ def get_user_chats(user_id):
     ]
 
 
-def save_message(sender_id, recipient_id, text):
+def save_message(
+    sender_id,
+    recipient_id,
+    text
+):
     if not isinstance(text, str) or not text.strip():
         return {
             "success": False,
@@ -465,7 +651,9 @@ def save_message(sender_id, recipient_id, text):
 
         if chat is None:
             cursor = connection.execute(
-                "INSERT INTO Chats DEFAULT VALUES"
+                """
+                INSERT INTO Chats DEFAULT VALUES
+                """
             )
 
             chat_id = cursor.lastrowid
@@ -545,7 +733,10 @@ def save_message(sender_id, recipient_id, text):
     }
 
 
-def get_chat_history(user_id, chat_id):
+def get_chat_history(
+    user_id,
+    chat_id
+):
     try:
         chat_id = int(chat_id)
     except (TypeError, ValueError):
@@ -631,7 +822,10 @@ def get_chat_history(user_id, chat_id):
     }
 
 
-def mark_messages_as_read(user_id, chat_id):
+def mark_messages_as_read(
+    user_id,
+    chat_id
+):
     try:
         chat_id = int(chat_id)
     except (TypeError, ValueError):
@@ -662,7 +856,9 @@ def mark_messages_as_read(user_id, chat_id):
             }
 
         read_at = connection.execute(
-            "SELECT datetime('now')"
+            """
+            SELECT datetime('now')
+            """
         ).fetchone()[0]
 
         cursor = connection.execute(
@@ -692,7 +888,10 @@ def mark_messages_as_read(user_id, chat_id):
     }
 
 
-def delete_message(user_id, message_id):
+def delete_message(
+    user_id,
+    message_id
+):
     try:
         message_id = int(message_id)
     except (TypeError, ValueError):
@@ -755,7 +954,10 @@ def delete_message(user_id, message_id):
     }
 
 
-def clear_chat(user_id, chat_id):
+def clear_chat(
+    user_id,
+    chat_id
+):
     try:
         chat_id = int(chat_id)
     except (TypeError, ValueError):
@@ -786,7 +988,9 @@ def clear_chat(user_id, chat_id):
             }
 
         cleared_at = connection.execute(
-            "SELECT datetime('now')"
+            """
+            SELECT datetime('now')
+            """
         ).fetchone()[0]
 
         connection.execute(
@@ -843,7 +1047,10 @@ def get_all_users():
     ]
 
 
-def block_user(admin_user_id, target_user_id):
+def block_user(
+    admin_user_id,
+    target_user_id
+):
     try:
         target_user_id = int(target_user_id)
     except (TypeError, ValueError):
@@ -917,6 +1124,17 @@ def block_user(admin_user_id, target_user_id):
             (target_user_id,)
         )
 
+        add_audit_log(
+            connection,
+            admin_user_id,
+            "USER_BLOCKED",
+            (
+                f"Адміністратор заблокував "
+                f"користувача '{user['Username']}' "
+                f"(ID {target_user_id})."
+            )
+        )
+
     return {
         "success": True,
         "message": "Користувача успішно заблоковано.",
@@ -925,7 +1143,10 @@ def block_user(admin_user_id, target_user_id):
     }
 
 
-def unblock_user(admin_user_id, target_user_id):
+def unblock_user(
+    admin_user_id,
+    target_user_id
+):
     try:
         target_user_id = int(target_user_id)
     except (TypeError, ValueError):
@@ -988,6 +1209,17 @@ def unblock_user(admin_user_id, target_user_id):
             (target_user_id,)
         )
 
+        add_audit_log(
+            connection,
+            admin_user_id,
+            "USER_UNBLOCKED",
+            (
+                f"Адміністратор розблокував "
+                f"користувача '{user['Username']}' "
+                f"(ID {target_user_id})."
+            )
+        )
+
     return {
         "success": True,
         "message": "Користувача успішно розблоковано.",
@@ -996,7 +1228,10 @@ def unblock_user(admin_user_id, target_user_id):
     }
 
 
-def delete_user(admin_user_id, target_user_id):
+def delete_user(
+    admin_user_id,
+    target_user_id
+):
     try:
         target_user_id = int(target_user_id)
     except (TypeError, ValueError):
@@ -1063,12 +1298,73 @@ def delete_user(admin_user_id, target_user_id):
             (target_user_id,)
         )
 
+        add_audit_log(
+            connection,
+            admin_user_id,
+            "USER_DELETED",
+            (
+                f"Адміністратор видалив "
+                f"обліковий запис "
+                f"'{user['Username']}' "
+                f"(ID {target_user_id})."
+            )
+        )
+
     return {
         "success": True,
         "message": "Обліковий запис користувача успішно видалено.",
         "user_id": target_user_id,
         "username": user["Username"]
     }
+
+
+def get_audit_log(limit=100):
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 100
+
+    if limit < 1:
+        limit = 1
+
+    if limit > 500:
+        limit = 500
+
+    with get_connection() as connection:
+        logs = connection.execute(
+            """
+            SELECT
+                a.LogId,
+                a.UserId,
+                u.Username,
+                a.EventType,
+                a.Description,
+                a.CreatedAt
+
+            FROM AuditLog a
+
+            LEFT JOIN Users u
+                ON u.UserId = a.UserId
+
+            ORDER BY
+                a.LogId DESC
+
+            LIMIT ?
+            """,
+            (limit,)
+        ).fetchall()
+
+    return [
+        {
+            "log_id": log["LogId"],
+            "user_id": log["UserId"],
+            "username": log["Username"],
+            "event_type": log["EventType"],
+            "description": log["Description"],
+            "created_at": log["CreatedAt"]
+        }
+        for log in logs
+    ]
 
 
 if __name__ == "__main__":

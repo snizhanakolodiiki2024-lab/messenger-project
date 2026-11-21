@@ -7,7 +7,10 @@ HOST = "127.0.0.1"
 PORT = 5000
 
 
-def send_json(client_socket, data):
+def send_json(
+    client_socket,
+    data
+):
     message = json.dumps(
         data,
         ensure_ascii=False
@@ -90,83 +93,97 @@ def logout(
 
 
 def main():
-    test_username = (
-        f"delete_test_{int(time.time())}"
+    # ==========================================
+    # 1. FAILED LOGIN
+    # ==========================================
+
+    failed_socket = connect_to_server()
+
+    failed_login = login(
+        failed_socket,
+        "user2",
+        "wrong_password"
     )
 
-    test_password = "123456"
+    print(
+        "\nFAILED LOGIN:"
+    )
+
+    print(
+        failed_login
+    )
+
+    failed_socket.close()
 
     # ==========================================
-    # CREATE TEMPORARY USER
+    # 2. NORMAL USER LOGIN
     # ==========================================
 
-    test_socket = connect_to_server()
+    user_socket = connect_to_server()
+
+    user_login = login(
+        user_socket,
+        "user2",
+        "123456"
+    )
+
+    print(
+        "\nUSER2 LOGIN:"
+    )
+
+    print(
+        user_login
+    )
+
+    if user_login.get("status") != "OK":
+        user_socket.close()
+        return
+
+    user_token = user_login["token"]
+
+    # ==========================================
+    # 3. USER TRIES GET_AUDIT_LOG
+    # ==========================================
 
     send_json(
-        test_socket,
+        user_socket,
         {
-            "type": "REGISTER",
-            "username": test_username,
-            "display_name": "Delete Test User",
-            "password": test_password
+            "type": "GET_AUDIT_LOG",
+            "token": user_token
         }
     )
 
-    register_response = receive_json(
-        test_socket
+    user_audit_response = receive_json(
+        user_socket
     )
 
     print(
-        "\nTEST USER REGISTER:"
+        "\nGET_AUDIT_LOG AS USER:"
     )
 
     print(
-        register_response
-    )
-
-    if (
-        register_response is None
-        or register_response.get("status")
-        != "OK"
-    ):
-        test_socket.close()
-        return
-
-    # ==========================================
-    # LOGIN AS TEMPORARY USER
-    # ==========================================
-
-    test_login = login(
-        test_socket,
-        test_username,
-        test_password
-    )
-
-    print(
-        "\nTEST USER LOGIN:"
-    )
-
-    print(
-        test_login
-    )
-
-    if test_login.get("status") != "OK":
-        test_socket.close()
-        return
-
-    test_user_id = test_login["user_id"]
-    test_token = test_login["token"]
-
-    print(
-        "\nTEST USER ID:"
-    )
-
-    print(
-        test_user_id
+        user_audit_response
     )
 
     # ==========================================
-    # ADMIN LOGIN
+    # 4. USER LOGOUT
+    # ==========================================
+
+    print(
+        "\nUSER2 LOGOUT:"
+    )
+
+    print(
+        logout(
+            user_socket,
+            user_token
+        )
+    )
+
+    user_socket.close()
+
+    # ==========================================
+    # 5. ADMIN LOGIN
     # ==========================================
 
     admin_socket = connect_to_server()
@@ -187,13 +204,154 @@ def main():
 
     if admin_login.get("status") != "OK":
         admin_socket.close()
-        test_socket.close()
         return
 
     admin_token = admin_login["token"]
 
     # ==========================================
-    # DELETE TEMPORARY USER
+    # 6. BLOCK USER2
+    # ==========================================
+
+    send_json(
+        admin_socket,
+        {
+            "type": "BLOCK_USER",
+            "token": admin_token,
+            "user_id": 2
+        }
+    )
+
+    block_response = receive_json(
+        admin_socket
+    )
+
+    print(
+        "\nBLOCK USER2:"
+    )
+
+    print(
+        block_response
+    )
+
+    # ==========================================
+    # 7. LOGIN WHILE BLOCKED
+    # ==========================================
+
+    blocked_socket = connect_to_server()
+
+    blocked_login = login(
+        blocked_socket,
+        "user2",
+        "123456"
+    )
+
+    print(
+        "\nUSER2 LOGIN WHILE BLOCKED:"
+    )
+
+    print(
+        blocked_login
+    )
+
+    blocked_socket.close()
+
+    # ==========================================
+    # 8. UNBLOCK USER2
+    # ==========================================
+
+    send_json(
+        admin_socket,
+        {
+            "type": "UNBLOCK_USER",
+            "token": admin_token,
+            "user_id": 2
+        }
+    )
+
+    unblock_response = receive_json(
+        admin_socket
+    )
+
+    print(
+        "\nUNBLOCK USER2:"
+    )
+
+    print(
+        unblock_response
+    )
+
+    # ==========================================
+    # 9. CREATE TEMP USER
+    # ==========================================
+
+    temporary_username = (
+        f"audit_test_{int(time.time())}"
+    )
+
+    temporary_password = "123456"
+
+    temporary_socket = connect_to_server()
+
+    send_json(
+        temporary_socket,
+        {
+            "type": "REGISTER",
+            "username": temporary_username,
+            "display_name": "Audit Test User",
+            "password": temporary_password
+        }
+    )
+
+    register_response = receive_json(
+        temporary_socket
+    )
+
+    print(
+        "\nTEMP USER REGISTER:"
+    )
+
+    print(
+        register_response
+    )
+
+    if register_response.get("status") != "OK":
+        temporary_socket.close()
+        admin_socket.close()
+        return
+
+    # ==========================================
+    # 10. TEMP USER LOGIN
+    # ==========================================
+
+    temporary_login = login(
+        temporary_socket,
+        temporary_username,
+        temporary_password
+    )
+
+    print(
+        "\nTEMP USER LOGIN:"
+    )
+
+    print(
+        temporary_login
+    )
+
+    if temporary_login.get("status") != "OK":
+        temporary_socket.close()
+        admin_socket.close()
+        return
+
+    temporary_user_id = (
+        temporary_login["user_id"]
+    )
+
+    temporary_token = (
+        temporary_login["token"]
+    )
+
+    # ==========================================
+    # 11. ADMIN DELETES TEMP USER
     # ==========================================
 
     send_json(
@@ -201,7 +359,7 @@ def main():
         {
             "type": "DELETE_USER",
             "token": admin_token,
-            "user_id": test_user_id
+            "user_id": temporary_user_id
         }
     )
 
@@ -210,7 +368,7 @@ def main():
     )
 
     print(
-        "\nDELETE USER RESPONSE:"
+        "\nDELETE TEMP USER:"
     )
 
     print(
@@ -218,79 +376,100 @@ def main():
     )
 
     # ==========================================
-    # OLD TOKEN MUST NO LONGER WORK
+    # 12. OLD TEMP SESSION MUST FAIL
     # ==========================================
 
     send_json(
-        test_socket,
+        temporary_socket,
         {
             "type": "GET_CHATS",
-            "token": test_token
+            "token": temporary_token
         }
     )
 
     old_session_response = receive_json(
-        test_socket
+        temporary_socket
     )
 
     print(
-        "\nOLD SESSION AFTER DELETE:"
+        "\nTEMP USER OLD SESSION:"
     )
 
     print(
         old_session_response
     )
 
-    test_socket.close()
+    temporary_socket.close()
 
     # ==========================================
-    # TRY LOGIN AGAIN
-    # ==========================================
-
-    second_test_socket = connect_to_server()
-
-    login_after_delete = login(
-        second_test_socket,
-        test_username,
-        test_password
-    )
-
-    print(
-        "\nLOGIN AFTER DELETE:"
-    )
-
-    print(
-        login_after_delete
-    )
-
-    second_test_socket.close()
-
-    # ==========================================
-    # ADMIN GET USERS
+    # 13. ADMIN GETS AUDIT LOG
     # ==========================================
 
     send_json(
         admin_socket,
         {
-            "type": "GET_USERS",
-            "token": admin_token
+            "type": "GET_AUDIT_LOG",
+            "token": admin_token,
+            "limit": 50
         }
     )
 
-    users_response = receive_json(
+    audit_response = receive_json(
         admin_socket
     )
 
     print(
-        "\nUSERS AFTER DELETE:"
+        "\nAUDIT LOG:"
     )
 
-    print(
-        users_response
-    )
+    if audit_response.get("status") == "OK":
+        logs = audit_response.get(
+            "logs",
+            []
+        )
+
+        for log in logs:
+            print(
+                "\n--------------------"
+            )
+
+            print(
+                "Log ID:",
+                log["log_id"]
+            )
+
+            print(
+                "User ID:",
+                log["user_id"]
+            )
+
+            print(
+                "Username:",
+                log["username"]
+            )
+
+            print(
+                "Event:",
+                log["event_type"]
+            )
+
+            print(
+                "Description:",
+                log["description"]
+            )
+
+            print(
+                "Created At:",
+                log["created_at"]
+            )
+
+    else:
+        print(
+            audit_response
+        )
 
     # ==========================================
-    # ADMIN LOGOUT
+    # 14. ADMIN LOGOUT
     # ==========================================
 
     print(

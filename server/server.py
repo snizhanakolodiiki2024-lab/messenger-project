@@ -34,6 +34,101 @@ HOST = "127.0.0.1"
 PORT = 5000
 
 
+# =========================================================
+# ONLINE CLIENTS
+# =========================================================
+
+active_clients = {}
+active_clients_lock = threading.Lock()
+
+socket_send_locks = {}
+socket_send_locks_lock = threading.Lock()
+
+
+def register_socket(client_socket):
+    with socket_send_locks_lock:
+        socket_send_locks[client_socket] = threading.Lock()
+
+
+def unregister_socket(client_socket):
+    with socket_send_locks_lock:
+        socket_send_locks.pop(
+            client_socket,
+            None
+        )
+
+
+def get_socket_lock(client_socket):
+    with socket_send_locks_lock:
+        lock = socket_send_locks.get(
+            client_socket
+        )
+
+        if lock is None:
+            lock = threading.Lock()
+
+            socket_send_locks[
+                client_socket
+            ] = lock
+
+        return lock
+
+
+def register_online_user(
+    user_id,
+    client_socket
+):
+    with active_clients_lock:
+        active_clients[user_id] = (
+            client_socket
+        )
+
+    print(
+        f"User {user_id} is ONLINE."
+    )
+
+
+def unregister_online_user(
+    user_id,
+    client_socket=None
+):
+    if user_id is None:
+        return
+
+    with active_clients_lock:
+        current_socket = (
+            active_clients.get(user_id)
+        )
+
+        if current_socket is None:
+            return
+
+        if (
+            client_socket is None
+            or current_socket
+            is client_socket
+        ):
+            active_clients.pop(
+                user_id,
+                None
+            )
+
+            print(
+                f"User {user_id} is OFFLINE."
+            )
+
+
+def get_online_socket(user_id):
+    with active_clients_lock:
+        return active_clients.get(
+            user_id
+        )
+
+
+# =========================================================
+# NETWORK HELPERS
+# =========================================================
+
 def send_json(
     client_socket,
     data
@@ -43,10 +138,86 @@ def send_json(
         ensure_ascii=False
     ) + "\n"
 
-    client_socket.sendall(
+    encoded_message = (
         message.encode("utf-8")
     )
 
+    lock = get_socket_lock(
+        client_socket
+    )
+
+    with lock:
+        client_socket.sendall(
+            encoded_message
+        )
+
+
+def push_to_user(
+    user_id,
+    data
+):
+    client_socket = get_online_socket(
+        user_id
+    )
+
+    if client_socket is None:
+        return False
+
+    try:
+        send_json(
+            client_socket,
+            data
+        )
+
+        return True
+
+    except (
+        OSError,
+        ConnectionError
+    ):
+        unregister_online_user(
+            user_id,
+            client_socket
+        )
+
+        return False
+
+
+def terminate_online_user(
+    user_id,
+    reason
+):
+    client_socket = get_online_socket(
+        user_id
+    )
+
+    if client_socket is None:
+        return
+
+    try:
+        send_json(
+            client_socket,
+            {
+                "type": "SESSION_TERMINATED",
+                "reason": reason
+            }
+        )
+
+    except (
+        OSError,
+        ConnectionError
+    ):
+        pass
+
+    unregister_online_user(
+        user_id,
+        client_socket
+    )
+
+
+# =========================================================
+# AUTH HELPERS
+# =========================================================
 
 def get_authenticated_user(token):
     session = get_session(token)
@@ -71,7 +242,9 @@ def get_authenticated_user(token):
 
 
 def get_admin_user(token):
-    user = get_authenticated_user(token)
+    user = get_authenticated_user(
+        token
+    )
 
     if user is None:
         return (
@@ -110,6 +283,10 @@ def send_result(
     )
 
 
+# =========================================================
+# CLIENT HANDLER
+# =========================================================
+
 def handle_client(
     client_socket,
     client_address
@@ -118,21 +295,33 @@ def handle_client(
         f"Client connected: {client_address}"
     )
 
+    register_socket(
+        client_socket
+    )
+
     buffer = ""
+
+    connected_user_id = None
 
     try:
         while True:
-            data = client_socket.recv(4096)
+            data = client_socket.recv(
+                4096
+            )
 
             if not data:
                 break
 
-            buffer += data.decode("utf-8")
+            buffer += data.decode(
+                "utf-8"
+            )
 
             while "\n" in buffer:
-                message, buffer = buffer.split(
-                    "\n",
-                    1
+                message, buffer = (
+                    buffer.split(
+                        "\n",
+                        1
+                    )
                 )
 
                 if not message.strip():
@@ -148,9 +337,13 @@ def handle_client(
                         request
                     )
 
-                    request_type = request.get(
-                        "type"
+                    request_type = (
+                        request.get("type")
                     )
+
+                    # =====================================
+                    # PING
+                    # =====================================
 
                     if request_type == "PING":
                         send_json(
@@ -160,6 +353,10 @@ def handle_client(
                                 "message": "PONG"
                             }
                         )
+
+                    # =====================================
+                    # REGISTER
+                    # =====================================
 
                     elif request_type == "REGISTER":
                         result = create_user(
@@ -179,6 +376,10 @@ def handle_client(
                             result
                         )
 
+                    # =====================================
+                    # LOGIN
+                    # =====================================
+
                     elif request_type == "LOGIN":
                         result = authenticate_user(
                             username=request.get(
@@ -190,16 +391,46 @@ def handle_client(
                         )
 
                         if result["success"]:
+                            if (
+                                connected_user_id
+                                is not None
+                            ):
+                                unregister_online_user(
+                                    connected_user_id,
+                                    client_socket
+                                )
+
+                            connected_user_id = (
+                                result["user_id"]
+                            )
+
+                            register_online_user(
+                                connected_user_id,
+                                client_socket
+                            )
+
                             send_json(
                                 client_socket,
                                 {
                                     "status": "OK",
-                                    "message": result["message"],
-                                    "user_id": result["user_id"],
-                                    "username": result["username"],
-                                    "display_name": result["display_name"],
-                                    "role": result["role"],
-                                    "token": result["token"]
+                                    "message": result[
+                                        "message"
+                                    ],
+                                    "user_id": result[
+                                        "user_id"
+                                    ],
+                                    "username": result[
+                                        "username"
+                                    ],
+                                    "display_name": result[
+                                        "display_name"
+                                    ],
+                                    "role": result[
+                                        "role"
+                                    ],
+                                    "token": result[
+                                        "token"
+                                    ]
                                 }
                             )
 
@@ -208,16 +439,46 @@ def handle_client(
                                 client_socket,
                                 {
                                     "status": "ERROR",
-                                    "message": result["message"]
+                                    "message": result[
+                                        "message"
+                                    ]
                                 }
                             )
+
+                    # =====================================
+                    # LOGOUT
+                    # =====================================
 
                     elif request_type == "LOGOUT":
                         token = request.get(
                             "token"
                         )
 
+                        session = get_session(
+                            token
+                        )
+
+                        logout_user_id = (
+                            session["UserId"]
+                            if session
+                            is not None
+                            else None
+                        )
+
                         if close_session(token):
+                            unregister_online_user(
+                                logout_user_id,
+                                client_socket
+                            )
+
+                            if (
+                                connected_user_id
+                                == logout_user_id
+                            ):
+                                connected_user_id = (
+                                    None
+                                )
+
                             send_json(
                                 client_socket,
                                 {
@@ -235,9 +496,17 @@ def handle_client(
                                 }
                             )
 
+                    # =====================================
+                    # SEARCH USER
+                    # =====================================
+
                     elif request_type == "SEARCH_USER":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -266,9 +535,17 @@ def handle_client(
                             }
                         )
 
+                    # =====================================
+                    # GET CHATS
+                    # =====================================
+
                     elif request_type == "GET_CHATS":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -286,14 +563,24 @@ def handle_client(
                             {
                                 "status": "OK",
                                 "chats": get_user_chats(
-                                    user["UserId"]
+                                    user[
+                                        "UserId"
+                                    ]
                                 )
                             }
                         )
 
+                    # =====================================
+                    # SEND MESSAGE
+                    # =====================================
+
                     elif request_type == "SEND_MESSAGE":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -306,24 +593,88 @@ def handle_client(
                             )
                             continue
 
-                        result = save_message(
-                            sender_id=user["UserId"],
-                            recipient_id=request.get(
+                        recipient_id = (
+                            request.get(
                                 "recipient_id"
+                            )
+                        )
+
+                        result = save_message(
+                            sender_id=user[
+                                "UserId"
+                            ],
+                            recipient_id=(
+                                recipient_id
                             ),
                             text=request.get(
                                 "text"
                             )
                         )
 
+                        # Спочатку відправник отримує
+                        # підтвердження збереження.
                         send_result(
                             client_socket,
                             result
                         )
+
+                        # Якщо повідомлення успішно
+                        # збережено — пробуємо
+                        # передати отримувачу online.
+                        if result["success"]:
+                            try:
+                                recipient_id = int(
+                                    recipient_id
+                                )
+                            except (
+                                TypeError,
+                                ValueError
+                            ):
+                                recipient_id = None
+
+                            if (
+                                recipient_id
+                                is not None
+                            ):
+                                delivered = (
+                                    push_to_user(
+                                        recipient_id,
+                                        {
+                                            "type": "NEW_MESSAGE",
+                                            "message": result[
+                                                "message_data"
+                                            ]
+                                        }
+                                    )
+                                )
+
+                                if delivered:
+                                    print(
+                                        "Message pushed "
+                                        f"to online user "
+                                        f"{recipient_id}."
+                                    )
+
+                                else:
+                                    print(
+                                        "Recipient "
+                                        f"{recipient_id} "
+                                        "is offline. "
+                                        "Message remains "
+                                        "stored in database."
+                                    )
+
+                    # =====================================
+                    # GET HISTORY
+                    # =====================================
 
                     elif request_type == "GET_HISTORY":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -336,10 +687,12 @@ def handle_client(
                             )
                             continue
 
-                        result = get_chat_history(
-                            user["UserId"],
-                            request.get(
-                                "chat_id"
+                        result = (
+                            get_chat_history(
+                                user["UserId"],
+                                request.get(
+                                    "chat_id"
+                                )
                             )
                         )
 
@@ -347,10 +700,18 @@ def handle_client(
                             client_socket,
                             result
                         )
+
+                    # =====================================
+                    # MARK AS READ
+                    # =====================================
 
                     elif request_type == "MARK_AS_READ":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -363,10 +724,14 @@ def handle_client(
                             )
                             continue
 
-                        result = mark_messages_as_read(
-                            user["UserId"],
-                            request.get(
-                                "chat_id"
+                        chat_id = request.get(
+                            "chat_id"
+                        )
+
+                        result = (
+                            mark_messages_as_read(
+                                user["UserId"],
+                                chat_id
                             )
                         )
 
@@ -375,9 +740,47 @@ def handle_client(
                             result
                         )
 
+                        # Якщо щось реально
+                        # було прочитано —
+                        # повідомляємо відправників.
+                        if (
+                            result["success"]
+                            and result[
+                                "updated_count"
+                            ] > 0
+                        ):
+                            for sender_id in (
+                                result[
+                                    "sender_ids"
+                                ]
+                            ):
+                                push_to_user(
+                                    sender_id,
+                                    {
+                                        "type": "MESSAGE_READ",
+                                        "chat_id": int(
+                                            chat_id
+                                        ),
+                                        "message_ids": result[
+                                            "message_ids"
+                                        ],
+                                        "read_at": result[
+                                            "read_at"
+                                        ]
+                                    }
+                                )
+
+                    # =====================================
+                    # DELETE MESSAGE
+                    # =====================================
+
                     elif request_type == "DELETE_MESSAGE":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -402,9 +805,17 @@ def handle_client(
                             result
                         )
 
+                    # =====================================
+                    # CLEAR CHAT
+                    # =====================================
+
                     elif request_type == "CLEAR_CHAT":
-                        user = get_authenticated_user(
-                            request.get("token")
+                        user = (
+                            get_authenticated_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if user is None:
@@ -429,9 +840,17 @@ def handle_client(
                             result
                         )
 
+                    # =====================================
+                    # GET USERS
+                    # =====================================
+
                     elif request_type == "GET_USERS":
-                        admin, error = get_admin_user(
-                            request.get("token")
+                        admin, error = (
+                            get_admin_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if error is not None:
@@ -448,13 +867,23 @@ def handle_client(
                             client_socket,
                             {
                                 "status": "OK",
-                                "users": get_all_users()
+                                "users": (
+                                    get_all_users()
+                                )
                             }
                         )
 
+                    # =====================================
+                    # BLOCK USER
+                    # =====================================
+
                     elif request_type == "BLOCK_USER":
-                        admin, error = get_admin_user(
-                            request.get("token")
+                        admin, error = (
+                            get_admin_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if error is not None:
@@ -467,10 +896,18 @@ def handle_client(
                             )
                             continue
 
-                        result = block_user(
-                            admin_user_id=admin["UserId"],
-                            target_user_id=request.get(
+                        target_user_id = (
+                            request.get(
                                 "user_id"
+                            )
+                        )
+
+                        result = block_user(
+                            admin_user_id=admin[
+                                "UserId"
+                            ],
+                            target_user_id=(
+                                target_user_id
                             )
                         )
 
@@ -479,9 +916,23 @@ def handle_client(
                             result
                         )
 
+                        if result["success"]:
+                            terminate_online_user(
+                                result["user_id"],
+                                "Ваш обліковий запис заблоковано адміністратором."
+                            )
+
+                    # =====================================
+                    # UNBLOCK USER
+                    # =====================================
+
                     elif request_type == "UNBLOCK_USER":
-                        admin, error = get_admin_user(
-                            request.get("token")
+                        admin, error = (
+                            get_admin_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if error is not None:
@@ -495,7 +946,9 @@ def handle_client(
                             continue
 
                         result = unblock_user(
-                            admin_user_id=admin["UserId"],
+                            admin_user_id=admin[
+                                "UserId"
+                            ],
                             target_user_id=request.get(
                                 "user_id"
                             )
@@ -506,9 +959,17 @@ def handle_client(
                             result
                         )
 
+                    # =====================================
+                    # DELETE USER
+                    # =====================================
+
                     elif request_type == "DELETE_USER":
-                        admin, error = get_admin_user(
-                            request.get("token")
+                        admin, error = (
+                            get_admin_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if error is not None:
@@ -522,7 +983,9 @@ def handle_client(
                             continue
 
                         result = delete_user(
-                            admin_user_id=admin["UserId"],
+                            admin_user_id=admin[
+                                "UserId"
+                            ],
                             target_user_id=request.get(
                                 "user_id"
                             )
@@ -533,9 +996,23 @@ def handle_client(
                             result
                         )
 
+                        if result["success"]:
+                            terminate_online_user(
+                                result["user_id"],
+                                "Ваш обліковий запис видалено адміністратором."
+                            )
+
+                    # =====================================
+                    # GET AUDIT LOG
+                    # =====================================
+
                     elif request_type == "GET_AUDIT_LOG":
-                        admin, error = get_admin_user(
-                            request.get("token")
+                        admin, error = (
+                            get_admin_user(
+                                request.get(
+                                    "token"
+                                )
+                            )
                         )
 
                         if error is not None:
@@ -563,6 +1040,10 @@ def handle_client(
                             }
                         )
 
+                    # =====================================
+                    # UNKNOWN
+                    # =====================================
+
                     else:
                         send_json(
                             client_socket,
@@ -583,16 +1064,40 @@ def handle_client(
 
     except ConnectionResetError:
         print(
-            f"Connection lost: {client_address}"
+            f"Connection lost: "
+            f"{client_address}"
+        )
+
+    except OSError:
+        print(
+            f"Socket closed: "
+            f"{client_address}"
         )
 
     finally:
-        client_socket.close()
-
-        print(
-            f"Client disconnected: {client_address}"
+        unregister_online_user(
+            connected_user_id,
+            client_socket
         )
 
+        unregister_socket(
+            client_socket
+        )
+
+        try:
+            client_socket.close()
+        except OSError:
+            pass
+
+        print(
+            f"Client disconnected: "
+            f"{client_address}"
+        )
+
+
+# =========================================================
+# SERVER
+# =========================================================
 
 def start_server():
     server_socket = socket.socket(
@@ -613,7 +1118,8 @@ def start_server():
     server_socket.listen()
 
     print(
-        f"Server started on {HOST}:{PORT}"
+        f"Server started on "
+        f"{HOST}:{PORT}"
     )
 
     print(
@@ -622,9 +1128,10 @@ def start_server():
 
     try:
         while True:
-            client_socket, client_address = (
-                server_socket.accept()
-            )
+            (
+                client_socket,
+                client_address
+            ) = server_socket.accept()
 
             client_thread = threading.Thread(
                 target=handle_client,

@@ -822,10 +822,7 @@ def get_chat_history(
     }
 
 
-def mark_messages_as_read(
-    user_id,
-    chat_id
-):
+def mark_messages_as_read(user_id, chat_id):
     try:
         chat_id = int(chat_id)
     except (TypeError, ValueError):
@@ -837,7 +834,7 @@ def mark_messages_as_read(
     with get_connection() as connection:
         membership = connection.execute(
             """
-            SELECT 1
+            SELECT ClearedAt
             FROM ChatMembers
             WHERE
                 ChatId = ?
@@ -855,13 +852,49 @@ def mark_messages_as_read(
                 "message": "Користувач не має доступу до цього чату."
             }
 
+        cleared_at = membership["ClearedAt"]
+
+        unread_messages = connection.execute(
+            """
+            SELECT
+                MessageId,
+                SenderId
+            FROM Messages
+            WHERE
+                ChatId = ?
+                AND SenderId != ?
+                AND ReadAt IS NULL
+                AND IsDeleted = 0
+                AND (
+                    ? IS NULL
+                    OR SentAt > ?
+                )
+            """,
+            (
+                chat_id,
+                user_id,
+                cleared_at,
+                cleared_at
+            )
+        ).fetchall()
+
+        if not unread_messages:
+            return {
+                "success": True,
+                "message": "Нових непрочитаних повідомлень немає.",
+                "updated_count": 0,
+                "read_at": None,
+                "message_ids": [],
+                "sender_ids": []
+            }
+
         read_at = connection.execute(
             """
             SELECT datetime('now')
             """
         ).fetchone()[0]
 
-        cursor = connection.execute(
+        connection.execute(
             """
             UPDATE Messages
             SET ReadAt = ?
@@ -870,21 +903,39 @@ def mark_messages_as_read(
                 AND SenderId != ?
                 AND ReadAt IS NULL
                 AND IsDeleted = 0
+                AND (
+                    ? IS NULL
+                    OR SentAt > ?
+                )
             """,
             (
                 read_at,
                 chat_id,
-                user_id
+                user_id,
+                cleared_at,
+                cleared_at
             )
         )
 
-        updated_count = cursor.rowcount
+        message_ids = [
+            message["MessageId"]
+            for message in unread_messages
+        ]
+
+        sender_ids = list(
+            {
+                message["SenderId"]
+                for message in unread_messages
+            }
+        )
 
     return {
         "success": True,
         "message": "Повідомлення позначено як прочитані.",
-        "updated_count": updated_count,
-        "read_at": read_at
+        "updated_count": len(message_ids),
+        "read_at": read_at,
+        "message_ids": message_ids,
+        "sender_ids": sender_ids
     }
 
 

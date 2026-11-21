@@ -1,6 +1,5 @@
 ﻿import socket
 import json
-import time
 
 
 HOST = "127.0.0.1"
@@ -25,12 +24,16 @@ def receive_json(client_socket):
     buffer = ""
 
     while True:
-        data = client_socket.recv(4096)
+        data = client_socket.recv(
+            4096
+        )
 
         if not data:
             return None
 
-        buffer += data.decode("utf-8")
+        buffer += data.decode(
+            "utf-8"
+        )
 
         if "\n" in buffer:
             message, _ = buffer.split(
@@ -93,36 +96,56 @@ def logout(
 
 
 def main():
-    # ==========================================
-    # 1. FAILED LOGIN
-    # ==========================================
-
-    failed_socket = connect_to_server()
-
-    failed_login = login(
-        failed_socket,
-        "user2",
-        "wrong_password"
+    print(
+        "======================================"
     )
 
     print(
-        "\nFAILED LOGIN:"
+        "TEST 1: REAL-TIME MESSAGE DELIVERY"
     )
 
     print(
-        failed_login
+        "======================================"
     )
 
-    failed_socket.close()
+    # ==================================================
+    # USER1 ONLINE
+    # ==================================================
 
-    # ==========================================
-    # 2. NORMAL USER LOGIN
-    # ==========================================
+    user1_socket = connect_to_server()
 
-    user_socket = connect_to_server()
+    user1_login = login(
+        user1_socket,
+        "user1",
+        "123456"
+    )
 
-    user_login = login(
-        user_socket,
+    print(
+        "\nUSER1 LOGIN:"
+    )
+
+    print(
+        user1_login
+    )
+
+    if user1_login.get(
+        "status"
+    ) != "OK":
+        user1_socket.close()
+        return
+
+    user1_token = user1_login[
+        "token"
+    ]
+
+    # ==================================================
+    # USER2 ONLINE
+    # ==================================================
+
+    user2_socket = connect_to_server()
+
+    user2_login = login(
+        user2_socket,
         "user2",
         "123456"
     )
@@ -132,42 +155,241 @@ def main():
     )
 
     print(
-        user_login
+        user2_login
     )
 
-    if user_login.get("status") != "OK":
-        user_socket.close()
+    if user2_login.get(
+        "status"
+    ) != "OK":
+        user1_socket.close()
+        user2_socket.close()
         return
 
-    user_token = user_login["token"]
+    user2_token = user2_login[
+        "token"
+    ]
 
-    # ==========================================
-    # 3. USER TRIES GET_AUDIT_LOG
-    # ==========================================
+    # ==================================================
+    # USER2 SENDS MESSAGE TO ONLINE USER1
+    # ==================================================
 
     send_json(
-        user_socket,
+        user2_socket,
         {
-            "type": "GET_AUDIT_LOG",
-            "token": user_token
+            "type": "SEND_MESSAGE",
+            "token": user2_token,
+            "recipient_id": 1,
+            "text": "Повідомлення в реальному часі."
         }
     )
 
-    user_audit_response = receive_json(
-        user_socket
+    send_response = receive_json(
+        user2_socket
     )
 
     print(
-        "\nGET_AUDIT_LOG AS USER:"
+        "\nUSER2 SEND RESPONSE:"
     )
 
     print(
-        user_audit_response
+        send_response
     )
 
-    # ==========================================
-    # 4. USER LOGOUT
-    # ==========================================
+    if send_response.get(
+        "status"
+    ) != "OK":
+        return
+
+    chat_id = send_response[
+        "message_data"
+    ]["chat_id"]
+
+    message_id = send_response[
+        "message_data"
+    ]["message_id"]
+
+    print(
+        "\nMESSAGE SAVED:"
+    )
+
+    print(
+        "Message ID:",
+        message_id
+    )
+
+    print(
+        "Status: Надіслано (✓)"
+    )
+
+    # ==================================================
+    # USER1 SHOULD RECEIVE PUSH AUTOMATICALLY
+    # ==================================================
+
+    pushed_message = receive_json(
+        user1_socket
+    )
+
+    print(
+        "\nUSER1 REAL-TIME EVENT:"
+    )
+
+    print(
+        pushed_message
+    )
+
+    if (
+        pushed_message is None
+        or pushed_message.get(
+            "type"
+        ) != "NEW_MESSAGE"
+    ):
+        print(
+            "ERROR: NEW_MESSAGE was not received."
+        )
+
+        return
+
+    print(
+        "\nREAL-TIME DELIVERY SUCCESS."
+    )
+
+    # ==================================================
+    # USER1 MARKS CHAT AS READ
+    # ==================================================
+
+    send_json(
+        user1_socket,
+        {
+            "type": "MARK_AS_READ",
+            "token": user1_token,
+            "chat_id": chat_id
+        }
+    )
+
+    read_response = receive_json(
+        user1_socket
+    )
+
+    print(
+        "\nUSER1 MARK AS READ RESPONSE:"
+    )
+
+    print(
+        read_response
+    )
+
+    # ==================================================
+    # USER2 SHOULD RECEIVE MESSAGE_READ EVENT
+    # ==================================================
+
+    read_event = receive_json(
+        user2_socket
+    )
+
+    print(
+        "\nUSER2 REAL-TIME READ EVENT:"
+    )
+
+    print(
+        read_event
+    )
+
+    if (
+        read_event is not None
+        and read_event.get(
+            "type"
+        ) == "MESSAGE_READ"
+    ):
+        print(
+            "\nSTATUS: Прочитано (✓✓)"
+        )
+
+    else:
+        print(
+            "\nERROR: MESSAGE_READ was not received."
+        )
+
+        return
+
+    # ==================================================
+    # USER1 GOES OFFLINE
+    # ==================================================
+
+    print(
+        "\nUSER1 LOGOUT:"
+    )
+
+    print(
+        logout(
+            user1_socket,
+            user1_token
+        )
+    )
+
+    user1_socket.close()
+
+    print(
+        "\n======================================"
+    )
+
+    print(
+        "TEST 2: OFFLINE MESSAGE STORAGE"
+    )
+
+    print(
+        "======================================"
+    )
+
+    # ==================================================
+    # USER2 SENDS MESSAGE WHILE USER1 OFFLINE
+    # ==================================================
+
+    send_json(
+        user2_socket,
+        {
+            "type": "SEND_MESSAGE",
+            "token": user2_token,
+            "recipient_id": 1,
+            "text": "Повідомлення для офлайн користувача."
+        }
+    )
+
+    offline_send_response = (
+        receive_json(
+            user2_socket
+        )
+    )
+
+    print(
+        "\nUSER2 SEND TO OFFLINE USER:"
+    )
+
+    print(
+        offline_send_response
+    )
+
+    if offline_send_response.get(
+        "status"
+    ) != "OK":
+        return
+
+    offline_chat_id = (
+        offline_send_response[
+            "message_data"
+        ]["chat_id"]
+    )
+
+    print(
+        "\nMESSAGE STORED IN DATABASE."
+    )
+
+    print(
+        "USER1 IS OFFLINE."
+    )
+
+    # ==================================================
+    # USER2 LOGOUT
+    # ==================================================
 
     print(
         "\nUSER2 LOGOUT:"
@@ -175,315 +397,138 @@ def main():
 
     print(
         logout(
-            user_socket,
-            user_token
+            user2_socket,
+            user2_token
         )
     )
 
-    user_socket.close()
+    user2_socket.close()
 
-    # ==========================================
-    # 5. ADMIN LOGIN
-    # ==========================================
+    # ==================================================
+    # USER1 COMES ONLINE LATER
+    # ==================================================
 
-    admin_socket = connect_to_server()
+    user1_socket = connect_to_server()
 
-    admin_login = login(
-        admin_socket,
-        "admin1",
-        "admin123"
-    )
-
-    print(
-        "\nADMIN LOGIN:"
-    )
-
-    print(
-        admin_login
-    )
-
-    if admin_login.get("status") != "OK":
-        admin_socket.close()
-        return
-
-    admin_token = admin_login["token"]
-
-    # ==========================================
-    # 6. BLOCK USER2
-    # ==========================================
-
-    send_json(
-        admin_socket,
-        {
-            "type": "BLOCK_USER",
-            "token": admin_token,
-            "user_id": 2
-        }
-    )
-
-    block_response = receive_json(
-        admin_socket
-    )
-
-    print(
-        "\nBLOCK USER2:"
-    )
-
-    print(
-        block_response
-    )
-
-    # ==========================================
-    # 7. LOGIN WHILE BLOCKED
-    # ==========================================
-
-    blocked_socket = connect_to_server()
-
-    blocked_login = login(
-        blocked_socket,
-        "user2",
+    user1_login = login(
+        user1_socket,
+        "user1",
         "123456"
     )
 
     print(
-        "\nUSER2 LOGIN WHILE BLOCKED:"
+        "\nUSER1 LOGIN AGAIN:"
     )
 
     print(
-        blocked_login
+        user1_login
     )
 
-    blocked_socket.close()
-
-    # ==========================================
-    # 8. UNBLOCK USER2
-    # ==========================================
-
-    send_json(
-        admin_socket,
-        {
-            "type": "UNBLOCK_USER",
-            "token": admin_token,
-            "user_id": 2
-        }
-    )
-
-    unblock_response = receive_json(
-        admin_socket
-    )
-
-    print(
-        "\nUNBLOCK USER2:"
-    )
-
-    print(
-        unblock_response
-    )
-
-    # ==========================================
-    # 9. CREATE TEMP USER
-    # ==========================================
-
-    temporary_username = (
-        f"audit_test_{int(time.time())}"
-    )
-
-    temporary_password = "123456"
-
-    temporary_socket = connect_to_server()
-
-    send_json(
-        temporary_socket,
-        {
-            "type": "REGISTER",
-            "username": temporary_username,
-            "display_name": "Audit Test User",
-            "password": temporary_password
-        }
-    )
-
-    register_response = receive_json(
-        temporary_socket
-    )
-
-    print(
-        "\nTEMP USER REGISTER:"
-    )
-
-    print(
-        register_response
-    )
-
-    if register_response.get("status") != "OK":
-        temporary_socket.close()
-        admin_socket.close()
+    if user1_login.get(
+        "status"
+    ) != "OK":
+        user1_socket.close()
         return
 
-    # ==========================================
-    # 10. TEMP USER LOGIN
-    # ==========================================
+    user1_token = user1_login[
+        "token"
+    ]
 
-    temporary_login = login(
-        temporary_socket,
-        temporary_username,
-        temporary_password
-    )
-
-    print(
-        "\nTEMP USER LOGIN:"
-    )
-
-    print(
-        temporary_login
-    )
-
-    if temporary_login.get("status") != "OK":
-        temporary_socket.close()
-        admin_socket.close()
-        return
-
-    temporary_user_id = (
-        temporary_login["user_id"]
-    )
-
-    temporary_token = (
-        temporary_login["token"]
-    )
-
-    # ==========================================
-    # 11. ADMIN DELETES TEMP USER
-    # ==========================================
+    # ==================================================
+    # GET HISTORY
+    # ==================================================
 
     send_json(
-        admin_socket,
+        user1_socket,
         {
-            "type": "DELETE_USER",
-            "token": admin_token,
-            "user_id": temporary_user_id
+            "type": "GET_HISTORY",
+            "token": user1_token,
+            "chat_id": offline_chat_id
         }
     )
 
-    delete_response = receive_json(
-        admin_socket
+    history_response = receive_json(
+        user1_socket
     )
 
     print(
-        "\nDELETE TEMP USER:"
+        "\nUSER1 HISTORY AFTER COMING ONLINE:"
     )
 
     print(
-        delete_response
+        history_response
     )
 
-    # ==========================================
-    # 12. OLD TEMP SESSION MUST FAIL
-    # ==========================================
+    offline_message_found = False
 
-    send_json(
-        temporary_socket,
-        {
-            "type": "GET_CHATS",
-            "token": temporary_token
-        }
-    )
+    if history_response.get(
+        "status"
+    ) == "OK":
 
-    old_session_response = receive_json(
-        temporary_socket
-    )
+        for message in (
+            history_response.get(
+                "messages",
+                []
+            )
+        ):
+            if (
+                message["text"]
+                == "Повідомлення для офлайн користувача."
+            ):
+                offline_message_found = True
 
-    print(
-        "\nTEMP USER OLD SESSION:"
-    )
+                print(
+                    "\nOFFLINE MESSAGE FOUND:"
+                )
 
-    print(
-        old_session_response
-    )
+                print(
+                    message
+                )
 
-    temporary_socket.close()
+                break
 
-    # ==========================================
-    # 13. ADMIN GETS AUDIT LOG
-    # ==========================================
-
-    send_json(
-        admin_socket,
-        {
-            "type": "GET_AUDIT_LOG",
-            "token": admin_token,
-            "limit": 50
-        }
-    )
-
-    audit_response = receive_json(
-        admin_socket
-    )
-
-    print(
-        "\nAUDIT LOG:"
-    )
-
-    if audit_response.get("status") == "OK":
-        logs = audit_response.get(
-            "logs",
-            []
+    if offline_message_found:
+        print(
+            "\nOFFLINE STORAGE TEST SUCCESS."
         )
-
-        for log in logs:
-            print(
-                "\n--------------------"
-            )
-
-            print(
-                "Log ID:",
-                log["log_id"]
-            )
-
-            print(
-                "User ID:",
-                log["user_id"]
-            )
-
-            print(
-                "Username:",
-                log["username"]
-            )
-
-            print(
-                "Event:",
-                log["event_type"]
-            )
-
-            print(
-                "Description:",
-                log["description"]
-            )
-
-            print(
-                "Created At:",
-                log["created_at"]
-            )
 
     else:
         print(
-            audit_response
+            "\nERROR: Offline message not found."
         )
 
-    # ==========================================
-    # 14. ADMIN LOGOUT
-    # ==========================================
+    # ==================================================
+    # FINAL LOGOUT
+    # ==================================================
 
     print(
-        "\nADMIN LOGOUT:"
+        "\nUSER1 FINAL LOGOUT:"
     )
 
     print(
         logout(
-            admin_socket,
-            admin_token
+            user1_socket,
+            user1_token
         )
     )
 
-    admin_socket.close()
+    user1_socket.close()
+
+    # ==================================================
+    # RESULT
+    # ==================================================
+
+    print(
+        "\n======================================"
+    )
+
+    print(
+        "REAL-TIME TEST COMPLETED"
+    )
+
+    print(
+        "======================================"
+    )
 
 
 if __name__ == "__main__":

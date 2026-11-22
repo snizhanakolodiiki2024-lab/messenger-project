@@ -3,6 +3,7 @@
 import socket
 import json
 import threading
+import codecs
 
 
 class NetworkClient:
@@ -218,6 +219,13 @@ class NetworkClient:
     def _receive_loop(self):
         current_socket = self._socket
 
+        # UTF-8 символ може бути розділений
+        # між двома recv(4096), тому використовуємо
+        # incremental decoder.
+        decoder = codecs.getincrementaldecoder(
+            "utf-8"
+        )()
+
         try:
             while self._running:
                 data = current_socket.recv(
@@ -227,9 +235,11 @@ class NetworkClient:
                 if not data:
                     break
 
-                self._buffer += data.decode(
-                    "utf-8"
+                decoded_data = decoder.decode(
+                    data
                 )
+
+                self._buffer += decoded_data
 
                 while "\n" in self._buffer:
                     (
@@ -266,6 +276,12 @@ class NetworkClient:
             ConnectionError
         ):
             pass
+
+        except UnicodeDecodeError as error:
+            print(
+                "UTF-8 decode error:",
+                error
+            )
 
         finally:
             # Важливо:

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 
 class RegisterWindow(QWidget):
-    # Саме ці сигнали очікує твій main.py
+    # Ці сигнали використовує main.py
     registration_successful = Signal(str)
     back_requested = Signal()
 
@@ -28,28 +28,39 @@ class RegisterWindow(QWidget):
 
         self._username_available = None
 
-        # Затримка перед перевіркою логіна
-        self._username_timer = QTimer(self)
-        self._username_timer.setSingleShot(True)
-        self._username_timer.setInterval(500)
+        # Затримка перед live-перевіркою логіна
+        self._username_timer = QTimer(
+            self
+        )
+
+        self._username_timer.setSingleShot(
+            True
+        )
+
+        self._username_timer.setInterval(
+            500
+        )
+
         self._username_timer.timeout.connect(
             self._check_username
         )
 
-        self.setObjectName("authRoot")
+        self.setObjectName(
+            "authRoot"
+        )
 
         self.setWindowTitle(
             "Messenger — Реєстрація"
         )
 
         self.setMinimumSize(
-            540,
-            800
+            620,
+            820
         )
 
         self.resize(
-            540,
-            800
+            620,
+            820
         )
 
         self._create_ui()
@@ -64,7 +75,10 @@ class RegisterWindow(QWidget):
         return self._network_client
 
     @network_client.setter
-    def network_client(self, value):
+    def network_client(
+        self,
+        value
+    ):
         self._network_client = value
 
     # =====================================================
@@ -72,7 +86,9 @@ class RegisterWindow(QWidget):
     # =====================================================
 
     def _create_ui(self):
-        main_layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(
+            self
+        )
 
         main_layout.setContentsMargins(
             45,
@@ -81,24 +97,44 @@ class RegisterWindow(QWidget):
             25
         )
 
-        main_layout.setSpacing(0)
+        main_layout.setSpacing(
+            0
+        )
 
         main_layout.addStretch()
 
+        # =================================================
+        # CARD
+        # =================================================
+
         card = QFrame()
-        card.setObjectName("loginCard")
-        card.setMaximumWidth(430)
 
-        card_layout = QVBoxLayout(card)
-
-        card_layout.setContentsMargins(
-            38,
-            30,
-            38,
-            28
+        card.setObjectName(
+            "loginCard"
         )
 
-        card_layout.setSpacing(10)
+        card.setMaximumWidth(
+            500
+        )
+
+        card.setMinimumWidth(
+            500
+        )
+
+        card_layout = QVBoxLayout(
+            card
+        )
+
+        card_layout.setContentsMargins(
+            48,
+            32,
+            48,
+            30
+        )
+
+        card_layout.setSpacing(
+            10
+        )
 
         # =================================================
         # TITLE
@@ -116,8 +152,9 @@ class RegisterWindow(QWidget):
             Qt.AlignCenter
         )
 
+        # Змінено лише текст.
         subtitle_label = QLabel(
-            "Створення нового облікового запису"
+            "Створення нового акаунту"
         )
 
         subtitle_label.setObjectName(
@@ -128,8 +165,9 @@ class RegisterWindow(QWidget):
             Qt.AlignCenter
         )
 
+        # Один рядок.
         subtitle_label.setWordWrap(
-            True
+            False
         )
 
         card_layout.addWidget(
@@ -140,7 +178,9 @@ class RegisterWindow(QWidget):
             subtitle_label
         )
 
-        card_layout.addSpacing(20)
+        card_layout.addSpacing(
+            20
+        )
 
         # =================================================
         # FULL NAME
@@ -156,8 +196,9 @@ class RegisterWindow(QWidget):
 
         self.display_name_input = QLineEdit()
 
+        # Без "Наприклад..."
         self.display_name_input.setPlaceholderText(
-            "Наприклад: Сніжана Колодій"
+            ""
         )
 
         self.display_name_input.setClearButtonEnabled(
@@ -186,8 +227,9 @@ class RegisterWindow(QWidget):
 
         self.username_input = QLineEdit()
 
+        # Без "Придумайте..."
         self.username_input.setPlaceholderText(
-            "Придумайте унікальний логін"
+            ""
         )
 
         self.username_input.setClearButtonEnabled(
@@ -202,7 +244,7 @@ class RegisterWindow(QWidget):
             self.username_input
         )
 
-        # Статус логіна
+        # Статус live-перевірки логіна
         self.username_status_label = QLabel()
 
         self.username_status_label.setObjectName(
@@ -244,12 +286,15 @@ class RegisterWindow(QWidget):
             0
         )
 
-        password_layout.setSpacing(8)
+        password_layout.setSpacing(
+            8
+        )
 
         self.password_input = QLineEdit()
 
+        # Без "Введіть пароль"
         self.password_input.setPlaceholderText(
-            "Введіть пароль"
+            ""
         )
 
         self.password_input.setEchoMode(
@@ -262,11 +307,6 @@ class RegisterWindow(QWidget):
 
         self.show_password_button.setObjectName(
             "eyeButton"
-        )
-
-        self.show_password_button.setFixedSize(
-            52,
-            52
         )
 
         self.show_password_button.setCursor(
@@ -311,12 +351,15 @@ class RegisterWindow(QWidget):
             0
         )
 
-        confirm_layout.setSpacing(8)
+        confirm_layout.setSpacing(
+            8
+        )
 
         self.confirm_password_input = QLineEdit()
 
+        # Без "Повторіть пароль"
         self.confirm_password_input.setPlaceholderText(
-            "Повторіть пароль"
+            ""
         )
 
         self.confirm_password_input.setEchoMode(
@@ -329,11 +372,6 @@ class RegisterWindow(QWidget):
 
         self.show_confirm_button.setObjectName(
             "eyeButton"
-        )
-
-        self.show_confirm_button.setFixedSize(
-            52,
-            52
         )
 
         self.show_confirm_button.setCursor(
@@ -393,7 +431,9 @@ class RegisterWindow(QWidget):
             48
         )
 
-        card_layout.addSpacing(8)
+        card_layout.addSpacing(
+            8
+        )
 
         card_layout.addWidget(
             self.register_button
@@ -404,11 +444,17 @@ class RegisterWindow(QWidget):
             alignment=Qt.AlignCenter
         )
 
-        main_layout.addStretch()
-
         # =================================================
         # BOTTOM LOGIN LINK
         # =================================================
+        #
+        # Прибрали великий stretch між карткою
+        # та "Уже маєш акаунт?"
+        # =================================================
+
+        main_layout.addSpacing(
+            20
+        )
 
         bottom_layout = QHBoxLayout()
 
@@ -416,7 +462,9 @@ class RegisterWindow(QWidget):
             Qt.AlignCenter
         )
 
-        bottom_layout.setSpacing(4)
+        bottom_layout.setSpacing(
+            4
+        )
 
         bottom_text = QLabel(
             "Уже маєш акаунт?"
@@ -450,7 +498,7 @@ class RegisterWindow(QWidget):
             bottom_layout
         )
 
-        main_layout.addSpacing(15)
+        main_layout.addStretch()
 
     # =====================================================
     # SIGNALS
@@ -461,8 +509,6 @@ class RegisterWindow(QWidget):
             self._register
         )
 
-        # ВАЖЛИВО:
-        # main.py очікує back_requested
         self.back_button.clicked.connect(
             self.back_requested.emit
         )
@@ -561,7 +607,9 @@ class RegisterWindow(QWidget):
 
         if not username:
             self.username_status_label.clear()
+
             self.username_status_label.hide()
+
             return
 
         if len(username) < 3:
@@ -608,8 +656,9 @@ class RegisterWindow(QWidget):
                 )
             )
 
-            # Якщо поки сервер відповідав,
-            # користувач уже ввів інший логін
+            # Якщо користувач змінив логін,
+            # поки сервер формував відповідь,
+            # стару відповідь не показуємо.
             if (
                 username
                 != self.username_input
@@ -715,6 +764,7 @@ class RegisterWindow(QWidget):
 
     def _clear_error(self):
         self.error_label.clear()
+
         self.error_label.hide()
 
     # =====================================================
@@ -723,7 +773,7 @@ class RegisterWindow(QWidget):
 
     def clear_form(self):
         """
-        Цей метод викликається з main.py
+        Викликається з main.py
         перед відкриттям реєстрації.
         """
 
@@ -732,16 +782,21 @@ class RegisterWindow(QWidget):
         self._username_available = None
 
         self.display_name_input.clear()
+
         self.username_input.clear()
+
         self.password_input.clear()
+
         self.confirm_password_input.clear()
 
         self.username_status_label.clear()
+
         self.username_status_label.hide()
 
         self._clear_error()
 
         self._password_visible = False
+
         self._confirm_password_visible = False
 
         self.password_input.setEchoMode(
@@ -801,6 +856,7 @@ class RegisterWindow(QWidget):
             )
 
             self.display_name_input.setFocus()
+
             return
 
         if not username:
@@ -809,6 +865,7 @@ class RegisterWindow(QWidget):
             )
 
             self.username_input.setFocus()
+
             return
 
         if len(username) < 3:
@@ -817,6 +874,7 @@ class RegisterWindow(QWidget):
             )
 
             self.username_input.setFocus()
+
             return
 
         if self._username_available is False:
@@ -825,6 +883,7 @@ class RegisterWindow(QWidget):
             )
 
             self.username_input.setFocus()
+
             return
 
         if self._username_available is None:
@@ -833,6 +892,7 @@ class RegisterWindow(QWidget):
             )
 
             self.username_input.setFocus()
+
             return
 
         if not password:
@@ -841,6 +901,7 @@ class RegisterWindow(QWidget):
             )
 
             self.password_input.setFocus()
+
             return
 
         if len(password) < 6:
@@ -849,6 +910,7 @@ class RegisterWindow(QWidget):
             )
 
             self.password_input.setFocus()
+
             return
 
         if password != confirm_password:
@@ -857,6 +919,7 @@ class RegisterWindow(QWidget):
             )
 
             self.confirm_password_input.setFocus()
+
             return
 
         # =================================================
@@ -901,7 +964,6 @@ class RegisterWindow(QWidget):
                     )
                 )
 
-                # Саме цей сигнал очікує main.py
                 self.registration_successful.emit(
                     username
                 )

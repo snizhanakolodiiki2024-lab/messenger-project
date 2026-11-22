@@ -828,6 +828,8 @@ class MainWindow(QWidget):
             False
         )
 
+        self.clear_chat_button.hide()
+
         self.clear_chat_button.setCursor(
             Qt.PointingHandCursor
         )
@@ -1108,6 +1110,8 @@ class MainWindow(QWidget):
             False
         )
 
+        self.clear_chat_button.hide()
+
         self._clear_messages()
 
         self._show_empty_state(
@@ -1344,9 +1348,10 @@ class MainWindow(QWidget):
         )
 
         self.clear_chat_button.setEnabled(
-            self._current_chat_id
-            is not None
+            False
         )
+
+        self.clear_chat_button.hide()
 
         self.message_input.setFocus()
 
@@ -1401,12 +1406,23 @@ class MainWindow(QWidget):
             self._clear_messages()
 
             if not messages:
+                self.clear_chat_button.setEnabled(
+                    False
+                )
+
+                self.clear_chat_button.hide()
+
                 self._show_empty_state(
-                    "У цьому чаті поки "
-                    "немає повідомлень."
+                    "У цьому чаті поки немає повідомлень."
                 )
 
             else:
+                self.clear_chat_button.setEnabled(
+                    True
+                )
+
+                self.clear_chat_button.show()
+
                 for message in messages:
                     self._append_message(
                         message
@@ -1465,6 +1481,34 @@ class MainWindow(QWidget):
         self,
         text
     ):
+        empty_container = QWidget()
+
+        empty_container.setObjectName(
+            "emptyStateContainer"
+        )
+
+        empty_container.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+
+        empty_layout = QVBoxLayout(
+            empty_container
+        )
+
+        empty_layout.setContentsMargins(
+            30,
+            30,
+            30,
+            30
+        )
+
+        empty_layout.setSpacing(
+            0
+        )
+
+        empty_layout.addStretch()
+
         label = QLabel(
             text
         )
@@ -1481,10 +1525,25 @@ class MainWindow(QWidget):
             True
         )
 
+        label.setMinimumHeight(
+            80
+        )
+
+        label.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred
+        )
+
+        empty_layout.addWidget(
+            label
+        )
+
+        empty_layout.addStretch()
+
         self.messages_layout.insertWidget(
             0,
-            label,
-            alignment=Qt.AlignCenter
+            empty_container,
+            1
         )
 
     def _append_message(
@@ -1507,7 +1566,10 @@ class MainWindow(QWidget):
             if (
                 first_widget is not None
                 and first_widget.objectName()
-                == "emptyChatLabel"
+                in (
+                    "emptyStateContainer",
+                    "emptyChatLabel"
+                )
             ):
                 removed = (
                     self.messages_layout
@@ -1612,6 +1674,8 @@ class MainWindow(QWidget):
                     self.clear_chat_button.setEnabled(
                         True
                     )
+
+                    self.clear_chat_button.show()
 
                     self._append_message(
                         message
@@ -1741,6 +1805,12 @@ class MainWindow(QWidget):
                 == "OK"
             ):
                 self._clear_messages()
+
+                self.clear_chat_button.setEnabled(
+                    False
+                )
+
+                self.clear_chat_button.hide()
 
                 self._show_empty_state(
                     "Історію переписки очищено."
@@ -1910,6 +1980,12 @@ class MainWindow(QWidget):
             self._current_chat_id
             == chat_id
         ):
+            self.clear_chat_button.setEnabled(
+                True
+            )
+
+            self.clear_chat_button.show()
+
             self._append_message(
                 message
             )

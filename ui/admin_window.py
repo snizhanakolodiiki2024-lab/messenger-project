@@ -1,6 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -48,7 +49,10 @@ class AdminWindow(QWidget):
         return self._network_client
 
     @network_client.setter
-    def network_client(self, value):
+    def network_client(
+        self,
+        value
+    ):
         self._network_client = value
 
     # =====================================================
@@ -139,8 +143,13 @@ class AdminWindow(QWidget):
             10
         )
 
-        # Search
-        search_layout = QHBoxLayout()
+        users_layout.setSpacing(
+            10
+        )
+
+        # =================================================
+        # SEARCH
+        # =================================================
 
         self.search_input = QLineEdit()
 
@@ -152,28 +161,14 @@ class AdminWindow(QWidget):
             True
         )
 
-        self.refresh_users_button = QPushButton(
-            "Оновити"
+        users_layout.addWidget(
+            self.search_input
         )
 
-        self.refresh_users_button.setObjectName(
-            "smallPrimaryButton"
-        )
+        # =================================================
+        # USERS TABLE
+        # =================================================
 
-        search_layout.addWidget(
-            self.search_input,
-            1
-        )
-
-        search_layout.addWidget(
-            self.refresh_users_button
-        )
-
-        users_layout.addLayout(
-            search_layout
-        )
-
-        # Table
         self.users_table = QTableWidget()
 
         self.users_table.setColumnCount(
@@ -227,8 +222,15 @@ class AdminWindow(QWidget):
             1
         )
 
-        # Buttons
+        # =================================================
+        # ACTION BUTTONS
+        # =================================================
+
         actions_layout = QHBoxLayout()
+
+        actions_layout.setSpacing(
+            8
+        )
 
         self.block_button = QPushButton(
             "Заблокувати"
@@ -252,6 +254,32 @@ class AdminWindow(QWidget):
 
         self.delete_button.setObjectName(
             "logoutButton"
+        )
+
+        self.block_button.setCursor(
+            Qt.PointingHandCursor
+        )
+
+        self.unblock_button.setCursor(
+            Qt.PointingHandCursor
+        )
+
+        self.delete_button.setCursor(
+            Qt.PointingHandCursor
+        )
+
+        # Поки користувач не вибраний,
+        # усі дії недоступні.
+        self.block_button.setEnabled(
+            False
+        )
+
+        self.unblock_button.setEnabled(
+            False
+        )
+
+        self.delete_button.setEnabled(
+            False
         )
 
         actions_layout.addWidget(
@@ -294,7 +322,9 @@ class AdminWindow(QWidget):
             10
         )
 
-        audit_top_layout = QHBoxLayout()
+        audit_layout.setSpacing(
+            10
+        )
 
         audit_title = QLabel(
             "Журнал системних подій"
@@ -304,26 +334,8 @@ class AdminWindow(QWidget):
             "sectionTitle"
         )
 
-        self.refresh_audit_button = QPushButton(
-            "Оновити журнал"
-        )
-
-        self.refresh_audit_button.setObjectName(
-            "smallPrimaryButton"
-        )
-
-        audit_top_layout.addWidget(
+        audit_layout.addWidget(
             audit_title
-        )
-
-        audit_top_layout.addStretch()
-
-        audit_top_layout.addWidget(
-            self.refresh_audit_button
-        )
-
-        audit_layout.addLayout(
-            audit_top_layout
         )
 
         self.audit_view = QTextBrowser()
@@ -347,14 +359,6 @@ class AdminWindow(QWidget):
             self._logout
         )
 
-        self.refresh_users_button.clicked.connect(
-            self.load_users
-        )
-
-        self.refresh_audit_button.clicked.connect(
-            self.load_audit_log
-        )
-
         self.block_button.clicked.connect(
             self._block_selected_user
         )
@@ -371,22 +375,50 @@ class AdminWindow(QWidget):
             self._filter_users
         )
 
+        self.users_table.itemSelectionChanged.connect(
+            self._update_action_buttons
+        )
+
+        # Дані автоматично оновлюються,
+        # коли адміністратор переходить
+        # між вкладками.
+        self.tabs.currentChanged.connect(
+            self._on_tab_changed
+        )
+
     # =====================================================
     # INITIAL LOAD
     # =====================================================
 
     def load_data(self):
+        # Заголовок завжди однаковий.
         self.admin_label.setText(
-            (
-                "Панель адміністратора — "
-                f"{self._network_client.display_name}"
-            )
+            "Панель адміністратора"
         )
 
         self.search_input.clear()
 
+        # При кожному новому вході
+        # відкриваємо вкладку користувачів.
+        self.tabs.setCurrentIndex(
+            0
+        )
+
         self.load_users()
-        self.load_audit_log()
+
+    # =====================================================
+    # TAB CHANGED
+    # =====================================================
+
+    def _on_tab_changed(
+        self,
+        index
+    ):
+        if index == 0:
+            self.load_users()
+
+        elif index == 1:
+            self.load_audit_log()
 
     # =====================================================
     # USERS
@@ -414,9 +446,29 @@ class AdminWindow(QWidget):
 
                 return
 
-            self._users = response.get(
+            users = response.get(
                 "users",
                 []
+            )
+
+            # Видалені акаунти залишаються
+            # доступними адміністратору,
+            # але відображаються внизу.
+            self._users = sorted(
+                users,
+                key=lambda user: (
+                    bool(
+                        user.get(
+                            "is_deleted"
+                        )
+                    ),
+                    int(
+                        user.get(
+                            "user_id",
+                            0
+                        )
+                    )
+                )
             )
 
             self._display_users(
@@ -434,10 +486,16 @@ class AdminWindow(QWidget):
                 )
             )
 
+    # =====================================================
+    # DISPLAY USERS
+    # =====================================================
+
     def _display_users(
         self,
         users
     ):
+        self.users_table.clearSelection()
+
         self.users_table.setRowCount(
             len(users)
         )
@@ -445,6 +503,12 @@ class AdminWindow(QWidget):
         for row, user in enumerate(
             users
         ):
+            is_deleted = bool(
+                user.get(
+                    "is_deleted"
+                )
+            )
+
             values = [
                 user.get(
                     "user_id",
@@ -471,9 +535,7 @@ class AdminWindow(QWidget):
                 ),
                 (
                     "Так"
-                    if user.get(
-                        "is_deleted"
-                    )
+                    if is_deleted
                     else "Ні"
                 ),
                 user.get(
@@ -495,18 +557,47 @@ class AdminWindow(QWidget):
                         user
                     )
 
+                # Видалені акаунти не зникають
+                # з історії адміністратора.
+                # Вони просто виглядають
+                # приглушеними.
+                if is_deleted:
+                    item.setForeground(
+                        QBrush(
+                            QColor(
+                                "#82778F"
+                            )
+                        )
+                    )
+
+                    item.setBackground(
+                        QBrush(
+                            QColor(
+                                "#211927"
+                            )
+                        )
+                    )
+
                 self.users_table.setItem(
                     row,
                     column,
                     item
                 )
 
+        self._update_action_buttons()
+
+    # =====================================================
+    # FILTER USERS
+    # =====================================================
+
     def _filter_users(
         self,
         text
     ):
         search_text = (
-            text.strip().lower()
+            text
+            .strip()
+            .lower()
         )
 
         if not search_text:
@@ -533,10 +624,17 @@ class AdminWindow(QWidget):
                 )
             ).lower()
 
+            role = str(
+                user.get(
+                    "role",
+                    ""
+                )
+            ).lower()
+
             if (
                 search_text in username
-                or search_text
-                in display_name
+                or search_text in display_name
+                or search_text in role
             ):
                 filtered.append(
                     user
@@ -546,18 +644,29 @@ class AdminWindow(QWidget):
             filtered
         )
 
-    def _get_selected_user(self):
+    # =====================================================
+    # SELECTED USER
+    # =====================================================
+
+    def _get_selected_user(
+        self,
+        show_message=True
+    ):
         row = (
             self.users_table
             .currentRow()
         )
 
         if row < 0:
-            QMessageBox.information(
-                self,
-                "Користувач",
-                "Спочатку виберіть користувача."
-            )
+            if show_message:
+                QMessageBox.information(
+                    self,
+                    "Користувач",
+                    (
+                        "Спочатку виберіть "
+                        "користувача."
+                    )
+                )
 
             return None
 
@@ -574,6 +683,103 @@ class AdminWindow(QWidget):
 
         return item.data(
             Qt.UserRole
+        )
+
+    # =====================================================
+    # ACTION BUTTON STATES
+    # =====================================================
+
+    def _update_action_buttons(self):
+        user = self._get_selected_user(
+            show_message=False
+        )
+
+        if user is None:
+            self.block_button.setEnabled(
+                False
+            )
+
+            self.unblock_button.setEnabled(
+                False
+            )
+
+            self.delete_button.setEnabled(
+                False
+            )
+
+            return
+
+        role = user.get(
+            "role"
+        )
+
+        is_deleted = bool(
+            user.get(
+                "is_deleted"
+            )
+        )
+
+        is_blocked = bool(
+            user.get(
+                "is_blocked"
+            )
+        )
+
+        # Адміністративний акаунт
+        # не можна блокувати,
+        # розблоковувати чи видаляти.
+        if role == "ADMIN":
+            self.block_button.setEnabled(
+                False
+            )
+
+            self.unblock_button.setEnabled(
+                False
+            )
+
+            self.delete_button.setEnabled(
+                False
+            )
+
+            return
+
+        # Якщо акаунт уже видалений,
+        # жодні подальші дії не потрібні.
+        if is_deleted:
+            self.block_button.setEnabled(
+                False
+            )
+
+            self.unblock_button.setEnabled(
+                False
+            )
+
+            self.delete_button.setEnabled(
+                False
+            )
+
+            return
+
+        if is_blocked:
+            self.block_button.setEnabled(
+                False
+            )
+
+            self.unblock_button.setEnabled(
+                True
+            )
+
+        else:
+            self.block_button.setEnabled(
+                True
+            )
+
+            self.unblock_button.setEnabled(
+                False
+            )
+
+        self.delete_button.setEnabled(
+            True
         )
 
     # =====================================================
@@ -595,7 +801,38 @@ class AdminWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Операція недоступна",
-                "Адміністратора блокувати не можна."
+                (
+                    "Адміністратора "
+                    "блокувати не можна."
+                )
+            )
+
+            return
+
+        if user.get(
+            "is_deleted"
+        ):
+            QMessageBox.warning(
+                self,
+                "Операція недоступна",
+                (
+                    "Видалений обліковий запис "
+                    "блокувати не можна."
+                )
+            )
+
+            return
+
+        if user.get(
+            "is_blocked"
+        ):
+            QMessageBox.information(
+                self,
+                "Блокування",
+                (
+                    "Цей користувач уже "
+                    "заблокований."
+                )
             )
 
             return
@@ -638,6 +875,9 @@ class AdminWindow(QWidget):
                 )
 
                 self.load_users()
+
+                # Журнал теж синхронізуємо
+                # автоматично після операції.
                 self.load_audit_log()
 
             else:
@@ -646,7 +886,10 @@ class AdminWindow(QWidget):
                     "Помилка",
                     response.get(
                         "message",
-                        "Не вдалося заблокувати користувача."
+                        (
+                            "Не вдалося "
+                            "заблокувати користувача."
+                        )
                     )
                 )
 
@@ -669,6 +912,49 @@ class AdminWindow(QWidget):
         if user is None:
             return
 
+        if (
+            user.get("role")
+            == "ADMIN"
+        ):
+            QMessageBox.warning(
+                self,
+                "Операція недоступна",
+                (
+                    "Для адміністратора "
+                    "ця операція недоступна."
+                )
+            )
+
+            return
+
+        if user.get(
+            "is_deleted"
+        ):
+            QMessageBox.warning(
+                self,
+                "Операція недоступна",
+                (
+                    "Видалений обліковий запис "
+                    "розблокувати не можна."
+                )
+            )
+
+            return
+
+        if not user.get(
+            "is_blocked"
+        ):
+            QMessageBox.information(
+                self,
+                "Розблокування",
+                (
+                    "Цей користувач "
+                    "не заблокований."
+                )
+            )
+
+            return
+
         try:
             response = (
                 self._network_client
@@ -688,7 +974,10 @@ class AdminWindow(QWidget):
                     "Розблокування",
                     response.get(
                         "message",
-                        "Користувача розблоковано."
+                        (
+                            "Користувача "
+                            "розблоковано."
+                        )
                     )
                 )
 
@@ -701,7 +990,10 @@ class AdminWindow(QWidget):
                     "Помилка",
                     response.get(
                         "message",
-                        "Не вдалося розблокувати користувача."
+                        (
+                            "Не вдалося "
+                            "розблокувати користувача."
+                        )
                     )
                 )
 
@@ -731,7 +1023,25 @@ class AdminWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Операція недоступна",
-                "Обліковий запис адміністратора видаляти не можна."
+                (
+                    "Обліковий запис "
+                    "адміністратора видаляти "
+                    "не можна."
+                )
+            )
+
+            return
+
+        if user.get(
+            "is_deleted"
+        ):
+            QMessageBox.information(
+                self,
+                "Видалення",
+                (
+                    "Цей обліковий запис "
+                    "уже видалено."
+                )
             )
 
             return
@@ -741,7 +1051,10 @@ class AdminWindow(QWidget):
             "Видалення облікового запису",
             (
                 "Ви дійсно хочете видалити "
-                f"обліковий запис '{user['username']}'?"
+                f"обліковий запис "
+                f"'{user['username']}'?\n\n"
+                "Користувач більше не зможе "
+                "увійти до системи."
             ),
             QMessageBox.Yes
             | QMessageBox.No
@@ -769,7 +1082,10 @@ class AdminWindow(QWidget):
                     "Видалення",
                     response.get(
                         "message",
-                        "Обліковий запис видалено."
+                        (
+                            "Обліковий запис "
+                            "видалено."
+                        )
                     )
                 )
 
@@ -782,7 +1098,10 @@ class AdminWindow(QWidget):
                     "Помилка",
                     response.get(
                         "message",
-                        "Не вдалося видалити обліковий запис."
+                        (
+                            "Не вдалося видалити "
+                            "обліковий запис."
+                        )
                     )
                 )
 
@@ -813,7 +1132,10 @@ class AdminWindow(QWidget):
                 self.audit_view.setText(
                     response.get(
                         "message",
-                        "Не вдалося завантажити журнал."
+                        (
+                            "Не вдалося "
+                            "завантажити журнал."
+                        )
                     )
                 )
 
@@ -828,7 +1150,10 @@ class AdminWindow(QWidget):
 
             if not logs:
                 self.audit_view.setText(
-                    "Журнал системних подій порожній."
+                    (
+                        "Журнал системних "
+                        "подій порожній."
+                    )
                 )
 
                 return

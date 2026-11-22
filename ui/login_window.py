@@ -31,14 +31,16 @@ class LoginWindow(QWidget):
             "Messenger — Вхід"
         )
 
+        # Трохи збільшили саме вікно,
+        # щоб картка входу могла бути ширшою.
         self.setMinimumSize(
-            520,
-            650
+            560,
+            700
         )
 
         self.resize(
-            520,
-            650
+            560,
+            700
         )
 
         self._create_ui()
@@ -62,9 +64,9 @@ class LoginWindow(QWidget):
         )
 
         main_layout.setContentsMargins(
-            45,
             40,
-            45,
+            35,
+            40,
             30
         )
 
@@ -72,7 +74,12 @@ class LoginWindow(QWidget):
             0
         )
 
+        # Верхній відступ
         main_layout.addStretch()
+
+        # =================================================
+        # CARD
+        # =================================================
 
         card = QFrame()
 
@@ -80,8 +87,14 @@ class LoginWindow(QWidget):
             "loginCard"
         )
 
+        # Було 420.
+        # Робимо картку трохи більшою.
         card.setMaximumWidth(
-            420
+            455
+        )
+
+        card.setMinimumWidth(
+            455
         )
 
         card_layout = QVBoxLayout(
@@ -89,10 +102,10 @@ class LoginWindow(QWidget):
         )
 
         card_layout.setContentsMargins(
+            42,
             38,
-            35,
-            38,
-            30
+            42,
+            34
         )
 
         card_layout.setSpacing(
@@ -127,8 +140,11 @@ class LoginWindow(QWidget):
             Qt.AlignCenter
         )
 
+        # ВАЖЛИВО:
+        # текст більше не переноситься
+        # на два рядки.
         subtitle_label.setWordWrap(
-            True
+            False
         )
 
         card_layout.addWidget(
@@ -157,8 +173,9 @@ class LoginWindow(QWidget):
 
         self.username_input = QLineEdit()
 
+        # Без тексту "Введіть логін"
         self.username_input.setPlaceholderText(
-            "Введіть логін"
+            ""
         )
 
         self.username_input.setClearButtonEnabled(
@@ -208,15 +225,16 @@ class LoginWindow(QWidget):
 
         self.password_input = QLineEdit()
 
+        # Без тексту "Введіть пароль"
         self.password_input.setPlaceholderText(
-            "Введіть пароль"
+            ""
         )
 
         self.password_input.setEchoMode(
             QLineEdit.Password
         )
 
-        # ОКО
+        # Іконка ока
         self.show_password_button = QPushButton(
             "👁"
         )
@@ -295,11 +313,18 @@ class LoginWindow(QWidget):
             alignment=Qt.AlignCenter
         )
 
-        main_layout.addStretch()
-
         # =================================================
         # REGISTER LINK
         # =================================================
+        #
+        # Раніше тут був великий stretch,
+        # через який текст ішов далеко вниз.
+        # Тепер невеликий фіксований відступ.
+        # =================================================
+
+        main_layout.addSpacing(
+            22
+        )
 
         bottom_layout = QHBoxLayout()
 
@@ -343,9 +368,9 @@ class LoginWindow(QWidget):
             bottom_layout
         )
 
-        main_layout.addSpacing(
-            15
-        )
+        # Нижній stretch залишаємо,
+        # щоб весь блок залишався по центру.
+        main_layout.addStretch()
 
     # =====================================================
     # SIGNALS

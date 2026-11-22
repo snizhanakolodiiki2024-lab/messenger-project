@@ -45,6 +45,40 @@ def load_styles(
         )
 
 
+# =========================================================
+# WINDOW POSITION
+# =========================================================
+
+def move_to_same_center(
+    source_window,
+    target_window
+):
+    """
+    Розташовує target_window так,
+    щоб його центр був у тому самому місці,
+    де знаходиться центр source_window.
+    """
+
+    source_center = (
+        source_window
+        .frameGeometry()
+        .center()
+    )
+
+    target_geometry = (
+        target_window
+        .frameGeometry()
+    )
+
+    target_geometry.moveCenter(
+        source_center
+    )
+
+    target_window.move(
+        target_geometry.topLeft()
+    )
+
+
 def main():
     application = QApplication(
         sys.argv
@@ -112,9 +146,18 @@ def main():
     # =====================================================
 
     def open_register_window():
-        login_window.hide()
-
+        # Спочатку очищаємо форму.
         register_window.clear_form()
+
+        # Центр реєстрації буде точно
+        # в тому самому місці,
+        # де зараз знаходиться вхід.
+        move_to_same_center(
+            login_window,
+            register_window
+        )
+
+        login_window.hide()
 
         register_window.show()
 
@@ -123,6 +166,13 @@ def main():
         register_window.activateWindow()
 
     def back_to_login():
+        # Повертаємо вхід у той самий центр,
+        # де зараз знаходиться реєстрація.
+        move_to_same_center(
+            register_window,
+            login_window
+        )
+
         register_window.hide()
 
         login_window.show()
@@ -134,6 +184,14 @@ def main():
     def handle_registration_success(
         username
     ):
+        # Після успішної реєстрації
+        # вхід також відкривається
+        # у тому самому місці.
+        move_to_same_center(
+            register_window,
+            login_window
+        )
+
         register_window.hide()
 
         login_window.username_input.setText(
@@ -156,6 +214,7 @@ def main():
 
     def show_login_after_logout():
         main_window.hide()
+
         admin_window.hide()
 
         login_window.password_input.clear()

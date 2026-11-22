@@ -1,145 +1,82 @@
-﻿import socket
+﻿# -*- coding: utf-8 -*-
+
+import socket
 import threading
 import json
 import sys
 from pathlib import Path
 
 
+# =========================================================
+# PROJECT PATH
+# =========================================================
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR))
 
 
+# =========================================================
+# DATABASE
+# =========================================================
+
 from database.db import (
+    get_connection,
     create_user,
     authenticate_user,
-    close_session,
-    get_session,
-    get_user_by_id,
-    search_users,
-    get_user_chats,
-    save_message,
-    get_chat_history,
-    mark_messages_as_read,
-    delete_message,
-    clear_chat,
-    get_all_users,
-    block_user,
-    unblock_user,
-    delete_user,
-    get_audit_log
+    is_username_available
 )
 
+
+# =========================================================
+# SERVER SETTINGS
+# =========================================================
 
 HOST = "127.0.0.1"
 PORT = 5000
 
 
 # =========================================================
-# ONLINE CLIENTS
+# ONLINE USERS
 # =========================================================
 
-active_clients = {}
-active_clients_lock = threading.Lock()
+online_clients = {}
+online_clients_lock = threading.Lock()
 
 socket_send_locks = {}
 socket_send_locks_lock = threading.Lock()
 
 
-def register_socket(client_socket):
-    with socket_send_locks_lock:
-        socket_send_locks[client_socket] = threading.Lock()
-
-
-def unregister_socket(client_socket):
-    with socket_send_locks_lock:
-        socket_send_locks.pop(
-            client_socket,
-            None
-        )
-
+# =========================================================
+# JSON
+# =========================================================
 
 def get_socket_lock(client_socket):
     with socket_send_locks_lock:
-        lock = socket_send_locks.get(
-            client_socket
-        )
-
-        if lock is None:
-            lock = threading.Lock()
-
+        if client_socket not in socket_send_locks:
             socket_send_locks[
                 client_socket
-            ] = lock
+            ] = threading.Lock()
 
-        return lock
-
-
-def register_online_user(
-    user_id,
-    client_socket
-):
-    with active_clients_lock:
-        active_clients[user_id] = (
+        return socket_send_locks[
             client_socket
-        )
+        ]
 
-    print(
-        f"User {user_id} is ONLINE."
+
+def send_json(client_socket, data):
+    """
+    Надсилає JSON-пакет клієнту.
+    """
+
+    message = (
+        json.dumps(
+            data,
+            ensure_ascii=False
+        )
+        + "\n"
     )
 
-
-def unregister_online_user(
-    user_id,
-    client_socket=None
-):
-    if user_id is None:
-        return
-
-    with active_clients_lock:
-        current_socket = (
-            active_clients.get(user_id)
-        )
-
-        if current_socket is None:
-            return
-
-        if (
-            client_socket is None
-            or current_socket
-            is client_socket
-        ):
-            active_clients.pop(
-                user_id,
-                None
-            )
-
-            print(
-                f"User {user_id} is OFFLINE."
-            )
-
-
-def get_online_socket(user_id):
-    with active_clients_lock:
-        return active_clients.get(
-            user_id
-        )
-
-
-# =========================================================
-# NETWORK HELPERS
-# =========================================================
-
-def send_json(
-    client_socket,
-    data
-):
-    message = json.dumps(
-        data,
-        ensure_ascii=False
-    ) + "\n"
-
-    encoded_message = (
-        message.encode("utf-8")
+    encoded = message.encode(
+        "utf-8"
     )
 
     lock = get_socket_lock(
@@ -148,13 +85,156 @@ def send_json(
 
     with lock:
         client_socket.sendall(
-            encoded_message
+            encoded
         )
 
 
-def push_to_user(
+# =========================================================
+# SESSION
+# =========================================================
+
+def get_session_user(token):
+    """
+    Повертає користувача активної сесії.
+    """
+
+    if not token:
+        return None
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                u.UserId,
+                u.Username,
+                u.DisplayName,
+                u.Role,
+                u.IsBlocked,
+                u.IsDeleted
+            FROM Sessions s
+            JOIN Users u
+                ON u.UserId = s.UserId
+            WHERE
+                s.Token = ?
+                AND s.IsActive = 1
+            LIMIT 1
+            """,
+            (token,)
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return dict(row)
+
+
+def end_session(token):
+    """
+    Завершує активну сесію.
+    """
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE Sessions
+            SET IsActive = 0
+            WHERE
+                Token = ?
+                AND IsActive = 1
+            """,
+            (token,)
+        )
+
+        return cursor.rowcount > 0
+
+
+# =========================================================
+# AUDIT LOG
+# =========================================================
+
+def add_audit_log(
     user_id,
-    data
+    event_type,
+    description
+):
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO AuditLog (
+                UserId,
+                EventType,
+                Description,
+                CreatedAt
+            )
+            VALUES (?, ?, ?, datetime('now'))
+            """,
+            (
+                user_id,
+                event_type,
+                description
+            )
+        )
+
+
+# =========================================================
+# ONLINE CLIENTS
+# =========================================================
+
+def set_user_online(
+    user_id,
+    client_socket
+):
+    with online_clients_lock:
+        online_clients[
+            user_id
+        ] = client_socket
+
+    print(
+        f"User {user_id} is ONLINE."
+    )
+
+
+def set_user_offline(
+    user_id,
+    client_socket=None
+):
+    if user_id is None:
+        return
+
+    with online_clients_lock:
+        current_socket = (
+            online_clients.get(
+                user_id
+            )
+        )
+
+        if (
+            client_socket is None
+            or current_socket
+            is client_socket
+        ):
+            online_clients.pop(
+                user_id,
+                None
+            )
+
+    print(
+        f"User {user_id} is OFFLINE."
+    )
+
+
+def get_online_socket(user_id):
+    with online_clients_lock:
+        return online_clients.get(
+            user_id
+        )
+
+
+def send_event_to_user(
+    user_id,
+    event
 ):
     client_socket = get_online_socket(
         user_id
@@ -166,16 +246,13 @@ def push_to_user(
     try:
         send_json(
             client_socket,
-            data
+            event
         )
 
         return True
 
-    except (
-        OSError,
-        ConnectionError
-    ):
-        unregister_online_user(
+    except OSError:
+        set_user_offline(
             user_id,
             client_socket
         )
@@ -183,104 +260,1324 @@ def push_to_user(
         return False
 
 
-def terminate_online_user(
+# =========================================================
+# SEARCH USERS
+# =========================================================
+
+def search_users(
+    search_text,
+    current_user_id
+):
+    search_text = (
+        search_text
+        .strip()
+    )
+
+    if not search_text:
+        return []
+
+    pattern = (
+        f"%{search_text}%"
+    )
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                DisplayName
+            FROM Users
+            WHERE
+                UserId != ?
+                AND IsDeleted = 0
+                AND IsBlocked = 0
+                AND (
+                    Username LIKE ?
+                    OR DisplayName LIKE ?
+                )
+            ORDER BY DisplayName
+            LIMIT 20
+            """,
+            (
+                current_user_id,
+                pattern,
+                pattern
+            )
+        )
+
+        users = []
+
+        for row in cursor.fetchall():
+            users.append(
+                {
+                    "user_id": row[
+                        "UserId"
+                    ],
+                    "username": row[
+                        "Username"
+                    ],
+                    "display_name": row[
+                        "DisplayName"
+                    ]
+                }
+            )
+
+        return users
+
+
+# =========================================================
+# CHAT HELPERS
+# =========================================================
+
+def get_chat_between_users(
+    first_user_id,
+    second_user_id
+):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT c.ChatId
+            FROM Chats c
+            JOIN ChatMembers cm1
+                ON cm1.ChatId = c.ChatId
+            JOIN ChatMembers cm2
+                ON cm2.ChatId = c.ChatId
+            WHERE
+                cm1.UserId = ?
+                AND cm2.UserId = ?
+            LIMIT 1
+            """,
+            (
+                first_user_id,
+                second_user_id
+            )
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return row[
+            "ChatId"
+        ]
+
+
+def create_chat(
+    first_user_id,
+    second_user_id
+):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO Chats (
+                CreatedAt
+            )
+            VALUES (
+                datetime('now')
+            )
+            """
+        )
+
+        chat_id = cursor.lastrowid
+
+        connection.execute(
+            """
+            INSERT INTO ChatMembers (
+                ChatId,
+                UserId,
+                ClearedAt
+            )
+            VALUES (?, ?, NULL)
+            """,
+            (
+                chat_id,
+                first_user_id
+            )
+        )
+
+        connection.execute(
+            """
+            INSERT INTO ChatMembers (
+                ChatId,
+                UserId,
+                ClearedAt
+            )
+            VALUES (?, ?, NULL)
+            """,
+            (
+                chat_id,
+                second_user_id
+            )
+        )
+
+        return chat_id
+
+
+def user_is_chat_member(
     user_id,
-    reason
+    chat_id
 ):
-    client_socket = get_online_socket(
-        user_id
-    )
-
-    if client_socket is None:
-        return
-
-    try:
-        send_json(
-            client_socket,
-            {
-                "type": "SESSION_TERMINATED",
-                "reason": reason
-            }
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT 1
+            FROM ChatMembers
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            LIMIT 1
+            """,
+            (
+                chat_id,
+                user_id
+            )
         )
 
-    except (
-        OSError,
-        ConnectionError
-    ):
-        pass
-
-    unregister_online_user(
-        user_id,
-        client_socket
-    )
+        return (
+            cursor.fetchone()
+            is not None
+        )
 
 
 # =========================================================
-# AUTH HELPERS
+# GET CHATS
 # =========================================================
 
-def get_authenticated_user(token):
-    session = get_session(token)
+def get_user_chats(user_id):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                c.ChatId,
+                other.UserId,
+                other.Username,
+                other.DisplayName,
+                mine.ClearedAt
+            FROM Chats c
 
-    if session is None:
-        return None
+            JOIN ChatMembers mine
+                ON mine.ChatId = c.ChatId
+                AND mine.UserId = ?
 
-    user = get_user_by_id(
-        session["UserId"]
-    )
+            JOIN ChatMembers other_member
+                ON other_member.ChatId = c.ChatId
+                AND other_member.UserId != ?
 
-    if user is None:
-        return None
+            JOIN Users other
+                ON other.UserId =
+                   other_member.UserId
 
-    if user["IsDeleted"] == 1:
-        return None
+            WHERE
+                other.IsDeleted = 0
 
-    if user["IsBlocked"] == 1:
-        return None
-
-    return user
-
-
-def get_admin_user(token):
-    user = get_authenticated_user(
-        token
-    )
-
-    if user is None:
-        return (
-            None,
-            "Недійсна або завершена сесія."
+            ORDER BY c.CreatedAt DESC
+            """,
+            (
+                user_id,
+                user_id
+            )
         )
 
-    if user["Role"] != "ADMIN":
-        return (
-            None,
-            "Недостатньо прав доступу."
-        )
+        chat_rows = cursor.fetchall()
 
-    return user, None
+        chats = []
 
+        for chat_row in chat_rows:
+            chat_id = chat_row[
+                "ChatId"
+            ]
 
-def send_result(
-    client_socket,
-    result
-):
-    send_json(
-        client_socket,
-        {
-            "status": (
-                "OK"
-                if result["success"]
-                else "ERROR"
+            cleared_at = chat_row[
+                "ClearedAt"
+            ]
+
+            if cleared_at:
+                last_cursor = (
+                    connection.execute(
+                        """
+                        SELECT
+                            Text,
+                            SentAt
+                        FROM Messages
+                        WHERE
+                            ChatId = ?
+                            AND IsDeleted = 0
+                            AND SentAt > ?
+                        ORDER BY
+                            SentAt DESC,
+                            MessageId DESC
+                        LIMIT 1
+                        """,
+                        (
+                            chat_id,
+                            cleared_at
+                        )
+                    )
+                )
+
+            else:
+                last_cursor = (
+                    connection.execute(
+                        """
+                        SELECT
+                            Text,
+                            SentAt
+                        FROM Messages
+                        WHERE
+                            ChatId = ?
+                            AND IsDeleted = 0
+                        ORDER BY
+                            SentAt DESC,
+                            MessageId DESC
+                        LIMIT 1
+                        """,
+                        (chat_id,)
+                    )
+                )
+
+            last_message_row = (
+                last_cursor.fetchone()
+            )
+
+            if last_message_row:
+                last_message = (
+                    last_message_row[
+                        "Text"
+                    ]
+                )
+
+                last_message_at = (
+                    last_message_row[
+                        "SentAt"
+                    ]
+                )
+
+            else:
+                last_message = None
+                last_message_at = None
+
+            if cleared_at:
+                unread_cursor = (
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) AS CountValue
+                        FROM Messages
+                        WHERE
+                            ChatId = ?
+                            AND SenderId != ?
+                            AND ReadAt IS NULL
+                            AND IsDeleted = 0
+                            AND SentAt > ?
+                        """,
+                        (
+                            chat_id,
+                            user_id,
+                            cleared_at
+                        )
+                    )
+                )
+
+            else:
+                unread_cursor = (
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) AS CountValue
+                        FROM Messages
+                        WHERE
+                            ChatId = ?
+                            AND SenderId != ?
+                            AND ReadAt IS NULL
+                            AND IsDeleted = 0
+                        """,
+                        (
+                            chat_id,
+                            user_id
+                        )
+                    )
+                )
+
+            unread_row = (
+                unread_cursor.fetchone()
+            )
+
+            unread_count = (
+                unread_row[
+                    "CountValue"
+                ]
+            )
+
+            chats.append(
+                {
+                    "chat_id": chat_id,
+                    "user_id": chat_row[
+                        "UserId"
+                    ],
+                    "username": chat_row[
+                        "Username"
+                    ],
+                    "display_name": chat_row[
+                        "DisplayName"
+                    ],
+                    "last_message": (
+                        last_message
+                    ),
+                    "last_message_at": (
+                        last_message_at
+                    ),
+                    "unread_count": (
+                        unread_count
+                    )
+                }
+            )
+
+        chats.sort(
+            key=lambda chat: (
+                chat[
+                    "last_message_at"
+                ]
+                or ""
             ),
-            **{
-                key: value
-                for key, value
-                in result.items()
-                if key != "success"
-            }
-        }
+            reverse=True
+        )
+
+        return chats
+
+
+# =========================================================
+# HISTORY
+# =========================================================
+
+def get_chat_history(
+    user_id,
+    chat_id
+):
+    if not user_is_chat_member(
+        user_id,
+        chat_id
+    ):
+        return None
+
+    with get_connection() as connection:
+        member_cursor = (
+            connection.execute(
+                """
+                SELECT ClearedAt
+                FROM ChatMembers
+                WHERE
+                    ChatId = ?
+                    AND UserId = ?
+                """,
+                (
+                    chat_id,
+                    user_id
+                )
+            )
+        )
+
+        member = (
+            member_cursor.fetchone()
+        )
+
+        cleared_at = (
+            member["ClearedAt"]
+            if member
+            else None
+        )
+
+        if cleared_at:
+            cursor = connection.execute(
+                """
+                SELECT
+                    m.MessageId,
+                    m.ChatId,
+                    m.SenderId,
+                    u.Username,
+                    u.DisplayName,
+                    m.Text,
+                    m.SentAt,
+                    m.ReadAt
+                FROM Messages m
+                JOIN Users u
+                    ON u.UserId = m.SenderId
+                WHERE
+                    m.ChatId = ?
+                    AND m.IsDeleted = 0
+                    AND m.SentAt > ?
+                ORDER BY
+                    m.SentAt ASC,
+                    m.MessageId ASC
+                """,
+                (
+                    chat_id,
+                    cleared_at
+                )
+            )
+
+        else:
+            cursor = connection.execute(
+                """
+                SELECT
+                    m.MessageId,
+                    m.ChatId,
+                    m.SenderId,
+                    u.Username,
+                    u.DisplayName,
+                    m.Text,
+                    m.SentAt,
+                    m.ReadAt
+                FROM Messages m
+                JOIN Users u
+                    ON u.UserId = m.SenderId
+                WHERE
+                    m.ChatId = ?
+                    AND m.IsDeleted = 0
+                ORDER BY
+                    m.SentAt ASC,
+                    m.MessageId ASC
+                """,
+                (chat_id,)
+            )
+
+        messages = []
+
+        for row in cursor.fetchall():
+            messages.append(
+                {
+                    "message_id": row[
+                        "MessageId"
+                    ],
+                    "chat_id": row[
+                        "ChatId"
+                    ],
+                    "sender_id": row[
+                        "SenderId"
+                    ],
+                    "sender_username": row[
+                        "Username"
+                    ],
+                    "sender_display_name": row[
+                        "DisplayName"
+                    ],
+                    "text": row[
+                        "Text"
+                    ],
+                    "sent_at": row[
+                        "SentAt"
+                    ],
+                    "read_at": row[
+                        "ReadAt"
+                    ]
+                }
+            )
+
+        return messages
+
+
+# =========================================================
+# SEND MESSAGE
+# =========================================================
+
+def save_message(
+    sender_id,
+    recipient_id,
+    text
+):
+    text = (
+        text
+        .strip()
     )
+
+    if not text:
+        return {
+            "success": False,
+            "message": (
+                "Повідомлення не може "
+                "бути порожнім."
+            )
+        }
+
+    if sender_id == recipient_id:
+        return {
+            "success": False,
+            "message": (
+                "Неможливо надіслати "
+                "повідомлення самому собі."
+            )
+        }
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                UserId,
+                IsBlocked,
+                IsDeleted
+            FROM Users
+            WHERE UserId = ?
+            LIMIT 1
+            """,
+            (recipient_id,)
+        )
+
+        recipient = cursor.fetchone()
+
+        if recipient is None:
+            return {
+                "success": False,
+                "message": (
+                    "Отримувача не знайдено."
+                )
+            }
+
+        if recipient[
+            "IsDeleted"
+        ]:
+            return {
+                "success": False,
+                "message": (
+                    "Обліковий запис "
+                    "отримувача видалено."
+                )
+            }
+
+        if recipient[
+            "IsBlocked"
+        ]:
+            return {
+                "success": False,
+                "message": (
+                    "Обліковий запис "
+                    "отримувача заблоковано."
+                )
+            }
+
+    chat_id = get_chat_between_users(
+        sender_id,
+        recipient_id
+    )
+
+    if chat_id is None:
+        chat_id = create_chat(
+            sender_id,
+            recipient_id
+        )
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO Messages (
+                ChatId,
+                SenderId,
+                Text,
+                SentAt,
+                ReadAt,
+                IsDeleted
+            )
+            VALUES (
+                ?,
+                ?,
+                ?,
+                datetime('now'),
+                NULL,
+                0
+            )
+            """,
+            (
+                chat_id,
+                sender_id,
+                text
+            )
+        )
+
+        message_id = (
+            cursor.lastrowid
+        )
+
+        cursor = connection.execute(
+            """
+            SELECT
+                MessageId,
+                ChatId,
+                SenderId,
+                Text,
+                SentAt,
+                ReadAt,
+                IsDeleted
+            FROM Messages
+            WHERE MessageId = ?
+            """,
+            (message_id,)
+        )
+
+        row = cursor.fetchone()
+
+        message_data = {
+            "message_id": row[
+                "MessageId"
+            ],
+            "chat_id": row[
+                "ChatId"
+            ],
+            "sender_id": row[
+                "SenderId"
+            ],
+            "text": row[
+                "Text"
+            ],
+            "sent_at": row[
+                "SentAt"
+            ],
+            "read_at": row[
+                "ReadAt"
+            ],
+            "is_deleted": row[
+                "IsDeleted"
+            ]
+        }
+
+        return {
+            "success": True,
+            "message": (
+                "Повідомлення успішно "
+                "збережено."
+            ),
+            "message_data": (
+                message_data
+            )
+        }
+
+
+# =========================================================
+# MARK AS READ
+# =========================================================
+
+def mark_chat_as_read(
+    user_id,
+    chat_id
+):
+    if not user_is_chat_member(
+        user_id,
+        chat_id
+    ):
+        return {
+            "success": False,
+            "message": (
+                "Немає доступу до діалогу."
+            )
+        }
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                MessageId,
+                SenderId
+            FROM Messages
+            WHERE
+                ChatId = ?
+                AND SenderId != ?
+                AND ReadAt IS NULL
+                AND IsDeleted = 0
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        )
+
+        rows = cursor.fetchall()
+
+        message_ids = [
+            row[
+                "MessageId"
+            ]
+            for row in rows
+        ]
+
+        sender_ids = list(
+            {
+                row[
+                    "SenderId"
+                ]
+                for row in rows
+            }
+        )
+
+        if not message_ids:
+            return {
+                "success": True,
+                "message": (
+                    "Непрочитаних "
+                    "повідомлень немає."
+                ),
+                "updated_count": 0,
+                "read_at": None,
+                "message_ids": [],
+                "sender_ids": []
+            }
+
+        connection.execute(
+            """
+            UPDATE Messages
+            SET ReadAt = datetime('now')
+            WHERE
+                ChatId = ?
+                AND SenderId != ?
+                AND ReadAt IS NULL
+                AND IsDeleted = 0
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        )
+
+        cursor = connection.execute(
+            """
+            SELECT datetime('now')
+            AS ReadTime
+            """
+        )
+
+        read_at = cursor.fetchone()[
+            "ReadTime"
+        ]
+
+        return {
+            "success": True,
+            "message": (
+                "Повідомлення позначено "
+                "як прочитані."
+            ),
+            "updated_count": len(
+                message_ids
+            ),
+            "read_at": read_at,
+            "message_ids": message_ids,
+            "sender_ids": sender_ids
+        }
+
+
+# =========================================================
+# DELETE MESSAGE
+# =========================================================
+
+def delete_own_message(
+    user_id,
+    message_id
+):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                MessageId,
+                ChatId,
+                SenderId,
+                IsDeleted
+            FROM Messages
+            WHERE MessageId = ?
+            LIMIT 1
+            """,
+            (message_id,)
+        )
+
+        message = cursor.fetchone()
+
+        if message is None:
+            return {
+                "success": False,
+                "message": (
+                    "Повідомлення не знайдено."
+                )
+            }
+
+        if (
+            message[
+                "SenderId"
+            ]
+            != user_id
+        ):
+            return {
+                "success": False,
+                "message": (
+                    "Можна видаляти тільки "
+                    "власні повідомлення."
+                )
+            }
+
+        connection.execute(
+            """
+            UPDATE Messages
+            SET IsDeleted = 1
+            WHERE MessageId = ?
+            """,
+            (message_id,)
+        )
+
+        return {
+            "success": True,
+            "message": (
+                "Повідомлення успішно "
+                "видалено."
+            ),
+            "message_id": (
+                message_id
+            ),
+            "chat_id": message[
+                "ChatId"
+            ]
+        }
+
+
+# =========================================================
+# CLEAR CHAT
+# =========================================================
+
+def clear_chat_for_user(
+    user_id,
+    chat_id
+):
+    if not user_is_chat_member(
+        user_id,
+        chat_id
+    ):
+        return {
+            "success": False,
+            "message": (
+                "Немає доступу до діалогу."
+            )
+        }
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE ChatMembers
+            SET ClearedAt = datetime('now')
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        )
+
+        cursor = connection.execute(
+            """
+            SELECT ClearedAt
+            FROM ChatMembers
+            WHERE
+                ChatId = ?
+                AND UserId = ?
+            """,
+            (
+                chat_id,
+                user_id
+            )
+        )
+
+        row = cursor.fetchone()
+
+        return {
+            "success": True,
+            "message": (
+                "Переписку успішно очищено."
+            ),
+            "chat_id": chat_id,
+            "cleared_at": row[
+                "ClearedAt"
+            ]
+        }
+
+
+# =========================================================
+# ADMIN HELPERS
+# =========================================================
+
+def is_admin(user):
+    return (
+        user is not None
+        and user.get(
+            "Role"
+        )
+        == "ADMIN"
+    )
+
+
+def get_all_users():
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                DisplayName,
+                Role,
+                IsBlocked,
+                IsDeleted,
+                CreatedAt
+            FROM Users
+            ORDER BY UserId
+            """
+        )
+
+        users = []
+
+        for row in cursor.fetchall():
+            users.append(
+                {
+                    "user_id": row[
+                        "UserId"
+                    ],
+                    "username": row[
+                        "Username"
+                    ],
+                    "display_name": row[
+                        "DisplayName"
+                    ],
+                    "role": row[
+                        "Role"
+                    ],
+                    "is_blocked": row[
+                        "IsBlocked"
+                    ],
+                    "is_deleted": row[
+                        "IsDeleted"
+                    ],
+                    "created_at": row[
+                        "CreatedAt"
+                    ]
+                }
+            )
+
+        return users
+
+
+def get_user_by_id(user_id):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                UserId,
+                Username,
+                DisplayName,
+                Role,
+                IsBlocked,
+                IsDeleted
+            FROM Users
+            WHERE UserId = ?
+            LIMIT 1
+            """,
+            (user_id,)
+        )
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return dict(row)
+
+
+def deactivate_user_sessions(
+    user_id
+):
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE Sessions
+            SET IsActive = 0
+            WHERE
+                UserId = ?
+                AND IsActive = 1
+            """,
+            (user_id,)
+        )
+
+
+def block_user_account(
+    admin_user,
+    target_user_id
+):
+    target = get_user_by_id(
+        target_user_id
+    )
+
+    if target is None:
+        return {
+            "success": False,
+            "message": (
+                "Користувача не знайдено."
+            )
+        }
+
+    if target[
+        "Role"
+    ] == "ADMIN":
+        return {
+            "success": False,
+            "message": (
+                "Адміністратора "
+                "блокувати не можна."
+            )
+        }
+
+    if target[
+        "IsDeleted"
+    ]:
+        return {
+            "success": False,
+            "message": (
+                "Обліковий запис "
+                "вже видалено."
+            )
+        }
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE Users
+            SET IsBlocked = 1
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        )
+
+    deactivate_user_sessions(
+        target_user_id
+    )
+
+    add_audit_log(
+        admin_user[
+            "UserId"
+        ],
+        "USER_BLOCKED",
+        (
+            "Адміністратор заблокував "
+            f"користувача "
+            f"'{target['Username']}' "
+            f"(ID {target_user_id})."
+        )
+    )
+
+    return {
+        "success": True,
+        "message": (
+            "Користувача успішно "
+            "заблоковано."
+        ),
+        "user_id": target_user_id,
+        "username": target[
+            "Username"
+        ]
+    }
+
+
+def unblock_user_account(
+    admin_user,
+    target_user_id
+):
+    target = get_user_by_id(
+        target_user_id
+    )
+
+    if target is None:
+        return {
+            "success": False,
+            "message": (
+                "Користувача не знайдено."
+            )
+        }
+
+    if target[
+        "Role"
+    ] == "ADMIN":
+        return {
+            "success": False,
+            "message": (
+                "Адміністратора "
+                "розблоковувати не потрібно."
+            )
+        }
+
+    if target[
+        "IsDeleted"
+    ]:
+        return {
+            "success": False,
+            "message": (
+                "Обліковий запис видалено."
+            )
+        }
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE Users
+            SET IsBlocked = 0
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        )
+
+    add_audit_log(
+        admin_user[
+            "UserId"
+        ],
+        "USER_UNBLOCKED",
+        (
+            "Адміністратор розблокував "
+            f"користувача "
+            f"'{target['Username']}' "
+            f"(ID {target_user_id})."
+        )
+    )
+
+    return {
+        "success": True,
+        "message": (
+            "Користувача успішно "
+            "розблоковано."
+        ),
+        "user_id": target_user_id,
+        "username": target[
+            "Username"
+        ]
+    }
+
+
+def delete_user_account(
+    admin_user,
+    target_user_id
+):
+    target = get_user_by_id(
+        target_user_id
+    )
+
+    if target is None:
+        return {
+            "success": False,
+            "message": (
+                "Користувача не знайдено."
+            )
+        }
+
+    if target[
+        "Role"
+    ] == "ADMIN":
+        return {
+            "success": False,
+            "message": (
+                "Обліковий запис "
+                "адміністратора видаляти "
+                "не можна."
+            )
+        }
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE Users
+            SET IsDeleted = 1
+            WHERE UserId = ?
+            """,
+            (target_user_id,)
+        )
+
+    deactivate_user_sessions(
+        target_user_id
+    )
+
+    add_audit_log(
+        admin_user[
+            "UserId"
+        ],
+        "USER_DELETED",
+        (
+            "Адміністратор видалив "
+            f"обліковий запис "
+            f"'{target['Username']}' "
+            f"(ID {target_user_id})."
+        )
+    )
+
+    return {
+        "success": True,
+        "message": (
+            "Обліковий запис користувача "
+            "успішно видалено."
+        ),
+        "user_id": target_user_id,
+        "username": target[
+            "Username"
+        ]
+    }
+
+
+def get_audit_logs(limit=100):
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 100
+
+    limit = max(
+        1,
+        min(
+            limit,
+            500
+        )
+    )
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                a.LogId,
+                a.UserId,
+                u.Username,
+                a.EventType,
+                a.Description,
+                a.CreatedAt
+            FROM AuditLog a
+            LEFT JOIN Users u
+                ON u.UserId = a.UserId
+            ORDER BY
+                a.LogId DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+
+        logs = []
+
+        for row in cursor.fetchall():
+            logs.append(
+                {
+                    "log_id": row[
+                        "LogId"
+                    ],
+                    "user_id": row[
+                        "UserId"
+                    ],
+                    "username": row[
+                        "Username"
+                    ],
+                    "event_type": row[
+                        "EventType"
+                    ],
+                    "description": row[
+                        "Description"
+                    ],
+                    "created_at": row[
+                        "CreatedAt"
+                    ]
+                }
+            )
+
+        return logs
 
 
 # =========================================================
@@ -292,16 +1589,13 @@ def handle_client(
     client_address
 ):
     print(
-        f"Client connected: {client_address}"
-    )
-
-    register_socket(
-        client_socket
+        f"Client connected: "
+        f"{client_address}"
     )
 
     buffer = ""
 
-    connected_user_id = None
+    current_user_id = None
 
     try:
         while True:
@@ -332,199 +1626,372 @@ def handle_client(
                         message
                     )
 
-                    print(
-                        f"Request from {client_address}:",
-                        request
+                except json.JSONDecodeError:
+                    send_json(
+                        client_socket,
+                        {
+                            "status": "ERROR",
+                            "message": (
+                                "Некоректний JSON."
+                            )
+                        }
                     )
 
-                    request_type = (
-                        request.get("type")
+                    continue
+
+                print(
+                    f"Request from "
+                    f"{client_address}:",
+                    request
+                )
+
+                request_type = (
+                    request.get(
+                        "type"
+                    )
+                )
+
+                # =========================================
+                # PING
+                # =========================================
+
+                if request_type == "PING":
+                    send_json(
+                        client_socket,
+                        {
+                            "status": "OK",
+                            "message": "PONG"
+                        }
                     )
 
-                    # =====================================
-                    # PING
-                    # =====================================
+                # =========================================
+                # CHECK USERNAME
+                # =========================================
 
-                    if request_type == "PING":
+                elif (
+                    request_type
+                    == "CHECK_USERNAME"
+                ):
+                    username = (
+                        request.get(
+                            "username",
+                            ""
+                        )
+                        .strip()
+                    )
+
+                    if len(username) < 3:
                         send_json(
                             client_socket,
                             {
                                 "status": "OK",
-                                "message": "PONG"
+                                "available": False,
+                                "message": (
+                                    "Логін повинен "
+                                    "містити щонайменше "
+                                    "3 символи."
+                                )
                             }
                         )
 
-                    # =====================================
-                    # REGISTER
-                    # =====================================
-
-                    elif request_type == "REGISTER":
-                        result = create_user(
-                            username=request.get(
-                                "username"
-                            ),
-                            display_name=request.get(
-                                "display_name"
-                            ),
-                            password=request.get(
-                                "password"
+                    else:
+                        available = (
+                            is_username_available(
+                                username
                             )
                         )
 
-                        send_result(
-                            client_socket,
-                            result
-                        )
-
-                    # =====================================
-                    # LOGIN
-                    # =====================================
-
-                    elif request_type == "LOGIN":
-                        result = authenticate_user(
-                            username=request.get(
-                                "username"
-                            ),
-                            password=request.get(
-                                "password"
-                            )
-                        )
-
-                        if result["success"]:
-                            if (
-                                connected_user_id
-                                is not None
-                            ):
-                                unregister_online_user(
-                                    connected_user_id,
-                                    client_socket
-                                )
-
-                            connected_user_id = (
-                                result["user_id"]
-                            )
-
-                            register_online_user(
-                                connected_user_id,
-                                client_socket
-                            )
-
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "OK",
-                                    "message": result[
-                                        "message"
-                                    ],
-                                    "user_id": result[
-                                        "user_id"
-                                    ],
-                                    "username": result[
-                                        "username"
-                                    ],
-                                    "display_name": result[
-                                        "display_name"
-                                    ],
-                                    "role": result[
-                                        "role"
-                                    ],
-                                    "token": result[
-                                        "token"
-                                    ]
-                                }
+                        if available:
+                            response_message = (
+                                "Логін вільний."
                             )
 
                         else:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": result[
-                                        "message"
-                                    ]
-                                }
+                            response_message = (
+                                "Користувач з таким "
+                                "логіном уже існує."
                             )
 
-                    # =====================================
-                    # LOGOUT
-                    # =====================================
-
-                    elif request_type == "LOGOUT":
-                        token = request.get(
-                            "token"
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "OK",
+                                "available": (
+                                    available
+                                ),
+                                "message": (
+                                    response_message
+                                )
+                            }
                         )
 
-                        session = get_session(
+                # =========================================
+                # REGISTER
+                # =========================================
+
+                elif (
+                    request_type
+                    == "REGISTER"
+                ):
+                    result = create_user(
+                        username=request.get(
+                            "username"
+                        ),
+                        display_name=request.get(
+                            "display_name"
+                        ),
+                        password=request.get(
+                            "password"
+                        )
+                    )
+
+                    send_json(
+                        client_socket,
+                        {
+                            "status": (
+                                "OK"
+                                if result[
+                                    "success"
+                                ]
+                                else "ERROR"
+                            ),
+                            "message": result[
+                                "message"
+                            ]
+                        }
+                    )
+
+                # =========================================
+                # LOGIN
+                # =========================================
+
+                elif (
+                    request_type
+                    == "LOGIN"
+                ):
+                    result = (
+                        authenticate_user(
+                            username=request.get(
+                                "username"
+                            ),
+                            password=request.get(
+                                "password"
+                            )
+                        )
+                    )
+
+                    if result[
+                        "success"
+                    ]:
+                        current_user_id = (
+                            result[
+                                "user_id"
+                            ]
+                        )
+
+                        set_user_online(
+                            current_user_id,
+                            client_socket
+                        )
+
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "OK",
+                                "message": (
+                                    result[
+                                        "message"
+                                    ]
+                                ),
+                                "user_id": (
+                                    result[
+                                        "user_id"
+                                    ]
+                                ),
+                                "username": (
+                                    result[
+                                        "username"
+                                    ]
+                                ),
+                                "display_name": (
+                                    result[
+                                        "display_name"
+                                    ]
+                                ),
+                                "role": (
+                                    result[
+                                        "role"
+                                    ]
+                                ),
+                                "token": (
+                                    result[
+                                        "token"
+                                    ]
+                                )
+                            }
+                        )
+
+                    else:
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "ERROR",
+                                "message": (
+                                    result[
+                                        "message"
+                                    ]
+                                )
+                            }
+                        )
+
+                # =========================================
+                # LOGOUT
+                # =========================================
+
+                elif (
+                    request_type
+                    == "LOGOUT"
+                ):
+                    token = request.get(
+                        "token"
+                    )
+
+                    session_user = (
+                        get_session_user(
+                            token
+                        )
+                    )
+
+                    if session_user is None:
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "ERROR",
+                                "message": (
+                                    "Недійсна або "
+                                    "завершена сесія."
+                                )
+                            }
+                        )
+
+                    else:
+                        user_id = session_user[
+                            "UserId"
+                        ]
+
+                        username = session_user[
+                            "Username"
+                        ]
+
+                        end_session(
                             token
                         )
 
-                        logout_user_id = (
-                            session["UserId"]
-                            if session
-                            is not None
-                            else None
+                        set_user_offline(
+                            user_id,
+                            client_socket
                         )
 
-                        if close_session(token):
-                            unregister_online_user(
-                                logout_user_id,
-                                client_socket
+                        add_audit_log(
+                            user_id,
+                            "LOGOUT",
+                            (
+                                f"Користувач "
+                                f"'{username}' "
+                                f"вийшов із системи."
                             )
+                        )
 
-                            if (
-                                connected_user_id
-                                == logout_user_id
-                            ):
-                                connected_user_id = (
-                                    None
+                        current_user_id = None
+
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "OK",
+                                "message": (
+                                    "Сесію успішно "
+                                    "завершено."
                                 )
+                            }
+                        )
 
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "OK",
-                                    "message": "Сесію успішно завершено."
-                                }
-                            )
+                # =========================================
+                # PROTECTED REQUESTS
+                # =========================================
 
-                        else:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або вже завершена сесія."
-                                }
-                            )
+                else:
+                    token = request.get(
+                        "token"
+                    )
+
+                    user = get_session_user(
+                        token
+                    )
+
+                    if user is None:
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "ERROR",
+                                "message": (
+                                    "Недійсна або "
+                                    "завершена сесія."
+                                )
+                            }
+                        )
+
+                        continue
+
+                    if user[
+                        "IsDeleted"
+                    ]:
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "ERROR",
+                                "message": (
+                                    "Обліковий запис "
+                                    "видалено."
+                                )
+                            }
+                        )
+
+                        continue
+
+                    if user[
+                        "IsBlocked"
+                    ]:
+                        send_json(
+                            client_socket,
+                            {
+                                "status": "ERROR",
+                                "message": (
+                                    "Обліковий запис "
+                                    "заблоковано."
+                                )
+                            }
+                        )
+
+                        continue
+
+                    user_id = user[
+                        "UserId"
+                    ]
 
                     # =====================================
                     # SEARCH USER
                     # =====================================
 
-                    elif request_type == "SEARCH_USER":
-                        user = (
-                            get_authenticated_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if user is None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
-                                }
-                            )
-                            continue
-
+                    if (
+                        request_type
+                        == "SEARCH_USER"
+                    ):
                         users = search_users(
                             request.get(
                                 "query",
                                 ""
                             ),
-                            user["UserId"]
+                            user_id
                         )
 
                         send_json(
@@ -539,509 +2006,608 @@ def handle_client(
                     # GET CHATS
                     # =====================================
 
-                    elif request_type == "GET_CHATS":
-                        user = (
-                            get_authenticated_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
+                    elif (
+                        request_type
+                        == "GET_CHATS"
+                    ):
+                        chats = get_user_chats(
+                            user_id
                         )
-
-                        if user is None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
-                                }
-                            )
-                            continue
 
                         send_json(
                             client_socket,
                             {
                                 "status": "OK",
-                                "chats": get_user_chats(
-                                    user[
-                                        "UserId"
-                                    ]
-                                )
+                                "chats": chats
                             }
                         )
+
+                    # =====================================
+                    # GET HISTORY
+                    # =====================================
+
+                    elif (
+                        request_type
+                        == "GET_HISTORY"
+                    ):
+                        chat_id = request.get(
+                            "chat_id"
+                        )
+
+                        messages = (
+                            get_chat_history(
+                                user_id,
+                                chat_id
+                            )
+                        )
+
+                        if messages is None:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": (
+                                        "Немає доступу "
+                                        "до діалогу."
+                                    )
+                                }
+                            )
+
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "messages": (
+                                        messages
+                                    )
+                                }
+                            )
 
                     # =====================================
                     # SEND MESSAGE
                     # =====================================
 
-                    elif request_type == "SEND_MESSAGE":
-                        user = (
-                            get_authenticated_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if user is None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
-                                }
-                            )
-                            continue
-
+                    elif (
+                        request_type
+                        == "SEND_MESSAGE"
+                    ):
                         recipient_id = (
                             request.get(
                                 "recipient_id"
                             )
                         )
 
+                        text = request.get(
+                            "text",
+                            ""
+                        )
+
                         result = save_message(
-                            sender_id=user[
-                                "UserId"
-                            ],
-                            recipient_id=(
-                                recipient_id
-                            ),
-                            text=request.get(
-                                "text"
-                            )
+                            user_id,
+                            recipient_id,
+                            text
                         )
 
-                        # Спочатку відправник отримує
-                        # підтвердження збереження.
-                        send_result(
-                            client_socket,
-                            result
-                        )
-
-                        # Якщо повідомлення успішно
-                        # збережено — пробуємо
-                        # передати отримувачу online.
-                        if result["success"]:
-                            try:
-                                recipient_id = int(
-                                    recipient_id
-                                )
-                            except (
-                                TypeError,
-                                ValueError
-                            ):
-                                recipient_id = None
-
-                            if (
-                                recipient_id
-                                is not None
-                            ):
-                                delivered = (
-                                    push_to_user(
-                                        recipient_id,
-                                        {
-                                            "type": "NEW_MESSAGE",
-                                            "message": result[
-                                                "message_data"
-                                            ]
-                                        }
-                                    )
-                                )
-
-                                if delivered:
-                                    print(
-                                        "Message pushed "
-                                        f"to online user "
-                                        f"{recipient_id}."
-                                    )
-
-                                else:
-                                    print(
-                                        "Recipient "
-                                        f"{recipient_id} "
-                                        "is offline. "
-                                        "Message remains "
-                                        "stored in database."
-                                    )
-
-                    # =====================================
-                    # GET HISTORY
-                    # =====================================
-
-                    elif request_type == "GET_HISTORY":
-                        user = (
-                            get_authenticated_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if user is None:
+                        if not result[
+                            "success"
+                        ]:
                             send_json(
                                 client_socket,
                                 {
                                     "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
+                                    "message": (
+                                        result[
+                                            "message"
+                                        ]
+                                    )
                                 }
                             )
-                            continue
 
-                        result = (
-                            get_chat_history(
-                                user["UserId"],
-                                request.get(
-                                    "chat_id"
+                        else:
+                            message_data = (
+                                result[
+                                    "message_data"
+                                ]
+                            )
+
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "message": (
+                                        result[
+                                            "message"
+                                        ]
+                                    ),
+                                    "message_data": (
+                                        message_data
+                                    )
+                                }
+                            )
+
+                            pushed = (
+                                send_event_to_user(
+                                    recipient_id,
+                                    {
+                                        "type": (
+                                            "NEW_MESSAGE"
+                                        ),
+                                        "message": (
+                                            message_data
+                                        )
+                                    }
                                 )
                             )
-                        )
 
-                        send_result(
-                            client_socket,
-                            result
-                        )
+                            if pushed:
+                                print(
+                                    "Message pushed "
+                                    "to online user "
+                                    f"{recipient_id}."
+                                )
+
+                            else:
+                                print(
+                                    f"Recipient "
+                                    f"{recipient_id} "
+                                    "is offline. "
+                                    "Message remains "
+                                    "stored in database."
+                                )
 
                     # =====================================
                     # MARK AS READ
                     # =====================================
 
-                    elif request_type == "MARK_AS_READ":
-                        user = (
-                            get_authenticated_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if user is None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
-                                }
-                            )
-                            continue
-
+                    elif (
+                        request_type
+                        == "MARK_AS_READ"
+                    ):
                         chat_id = request.get(
                             "chat_id"
                         )
 
                         result = (
-                            mark_messages_as_read(
-                                user["UserId"],
+                            mark_chat_as_read(
+                                user_id,
                                 chat_id
                             )
                         )
 
-                        send_result(
-                            client_socket,
-                            result
-                        )
+                        if not result[
+                            "success"
+                        ]:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": (
+                                        result[
+                                            "message"
+                                        ]
+                                    )
+                                }
+                            )
 
-                        # Якщо щось реально
-                        # було прочитано —
-                        # повідомляємо відправників.
-                        if (
-                            result["success"]
-                            and result[
-                                "updated_count"
-                            ] > 0
-                        ):
-                            for sender_id in (
-                                result[
-                                    "sender_ids"
-                                ]
-                            ):
-                                push_to_user(
-                                    sender_id,
-                                    {
-                                        "type": "MESSAGE_READ",
-                                        "chat_id": int(
-                                            chat_id
-                                        ),
-                                        "message_ids": result[
-                                            "message_ids"
-                                        ],
-                                        "read_at": result[
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "message": (
+                                        result[
+                                            "message"
+                                        ]
+                                    ),
+                                    "updated_count": (
+                                        result[
+                                            "updated_count"
+                                        ]
+                                    ),
+                                    "read_at": (
+                                        result[
                                             "read_at"
                                         ]
-                                    }
-                                )
+                                    ),
+                                    "message_ids": (
+                                        result[
+                                            "message_ids"
+                                        ]
+                                    ),
+                                    "sender_ids": (
+                                        result[
+                                            "sender_ids"
+                                        ]
+                                    )
+                                }
+                            )
+
+                            if (
+                                result[
+                                    "message_ids"
+                                ]
+                            ):
+                                for sender_id in (
+                                    result[
+                                        "sender_ids"
+                                    ]
+                                ):
+                                    send_event_to_user(
+                                        sender_id,
+                                        {
+                                            "type": (
+                                                "MESSAGE_READ"
+                                            ),
+                                            "chat_id": (
+                                                chat_id
+                                            ),
+                                            "message_ids": (
+                                                result[
+                                                    "message_ids"
+                                                ]
+                                            ),
+                                            "read_at": (
+                                                result[
+                                                    "read_at"
+                                                ]
+                                            )
+                                        }
+                                    )
 
                     # =====================================
                     # DELETE MESSAGE
                     # =====================================
 
-                    elif request_type == "DELETE_MESSAGE":
-                        user = (
-                            get_authenticated_user(
+                    elif (
+                        request_type
+                        == "DELETE_MESSAGE"
+                    ):
+                        result = (
+                            delete_own_message(
+                                user_id,
                                 request.get(
-                                    "token"
+                                    "message_id"
                                 )
                             )
                         )
 
-                        if user is None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
-                                }
-                            )
-                            continue
-
-                        result = delete_message(
-                            user["UserId"],
-                            request.get(
-                                "message_id"
-                            )
-                        )
-
-                        send_result(
+                        send_json(
                             client_socket,
-                            result
+                            {
+                                "status": (
+                                    "OK"
+                                    if result[
+                                        "success"
+                                    ]
+                                    else "ERROR"
+                                ),
+                                **{
+                                    key: value
+                                    for key, value
+                                    in result.items()
+                                    if key
+                                    != "success"
+                                }
+                            }
                         )
 
                     # =====================================
                     # CLEAR CHAT
                     # =====================================
 
-                    elif request_type == "CLEAR_CHAT":
-                        user = (
-                            get_authenticated_user(
+                    elif (
+                        request_type
+                        == "CLEAR_CHAT"
+                    ):
+                        result = (
+                            clear_chat_for_user(
+                                user_id,
                                 request.get(
-                                    "token"
+                                    "chat_id"
                                 )
                             )
                         )
-
-                        if user is None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": "Недійсна або завершена сесія."
-                                }
-                            )
-                            continue
-
-                        result = clear_chat(
-                            user["UserId"],
-                            request.get(
-                                "chat_id"
-                            )
-                        )
-
-                        send_result(
-                            client_socket,
-                            result
-                        )
-
-                    # =====================================
-                    # GET USERS
-                    # =====================================
-
-                    elif request_type == "GET_USERS":
-                        admin, error = (
-                            get_admin_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if error is not None:
-                            send_json(
-                                client_socket,
-                                {
-                                    "status": "ERROR",
-                                    "message": error
-                                }
-                            )
-                            continue
 
                         send_json(
                             client_socket,
                             {
-                                "status": "OK",
-                                "users": (
-                                    get_all_users()
-                                )
+                                "status": (
+                                    "OK"
+                                    if result[
+                                        "success"
+                                    ]
+                                    else "ERROR"
+                                ),
+                                **{
+                                    key: value
+                                    for key, value
+                                    in result.items()
+                                    if key
+                                    != "success"
+                                }
                             }
                         )
+
+                    # =====================================
+                    # GET USERS - ADMIN
+                    # =====================================
+
+                    elif (
+                        request_type
+                        == "GET_USERS"
+                    ):
+                        if not is_admin(
+                            user
+                        ):
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "ERROR",
+                                    "message": (
+                                        "Недостатньо "
+                                        "прав доступу."
+                                    )
+                                }
+                            )
+
+                        else:
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "users": (
+                                        get_all_users()
+                                    )
+                                }
+                            )
 
                     # =====================================
                     # BLOCK USER
                     # =====================================
 
-                    elif request_type == "BLOCK_USER":
-                        admin, error = (
-                            get_admin_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if error is not None:
+                    elif (
+                        request_type
+                        == "BLOCK_USER"
+                    ):
+                        if not is_admin(
+                            user
+                        ):
                             send_json(
                                 client_socket,
                                 {
                                     "status": "ERROR",
-                                    "message": error
+                                    "message": (
+                                        "Недостатньо "
+                                        "прав доступу."
+                                    )
                                 }
                             )
-                            continue
 
-                        target_user_id = (
-                            request.get(
-                                "user_id"
+                        else:
+                            target_user_id = (
+                                request.get(
+                                    "user_id"
+                                )
                             )
-                        )
 
-                        result = block_user(
-                            admin_user_id=admin[
-                                "UserId"
-                            ],
-                            target_user_id=(
-                                target_user_id
+                            result = (
+                                block_user_account(
+                                    user,
+                                    target_user_id
+                                )
                             )
-                        )
 
-                        send_result(
-                            client_socket,
-                            result
-                        )
-
-                        if result["success"]:
-                            terminate_online_user(
-                                result["user_id"],
-                                "Ваш обліковий запис заблоковано адміністратором."
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": (
+                                        "OK"
+                                        if result[
+                                            "success"
+                                        ]
+                                        else "ERROR"
+                                    ),
+                                    **{
+                                        key: value
+                                        for key, value
+                                        in result.items()
+                                        if key
+                                        != "success"
+                                    }
+                                }
                             )
+
+                            if result[
+                                "success"
+                            ]:
+                                send_event_to_user(
+                                    target_user_id,
+                                    {
+                                        "type": (
+                                            "SESSION_TERMINATED"
+                                        ),
+                                        "reason": (
+                                            "Ваш обліковий "
+                                            "запис заблоковано "
+                                            "адміністратором."
+                                        )
+                                    }
+                                )
+
+                                set_user_offline(
+                                    target_user_id
+                                )
 
                     # =====================================
                     # UNBLOCK USER
                     # =====================================
 
-                    elif request_type == "UNBLOCK_USER":
-                        admin, error = (
-                            get_admin_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if error is not None:
+                    elif (
+                        request_type
+                        == "UNBLOCK_USER"
+                    ):
+                        if not is_admin(
+                            user
+                        ):
                             send_json(
                                 client_socket,
                                 {
                                     "status": "ERROR",
-                                    "message": error
+                                    "message": (
+                                        "Недостатньо "
+                                        "прав доступу."
+                                    )
                                 }
                             )
-                            continue
 
-                        result = unblock_user(
-                            admin_user_id=admin[
-                                "UserId"
-                            ],
-                            target_user_id=request.get(
-                                "user_id"
+                        else:
+                            result = (
+                                unblock_user_account(
+                                    user,
+                                    request.get(
+                                        "user_id"
+                                    )
+                                )
                             )
-                        )
 
-                        send_result(
-                            client_socket,
-                            result
-                        )
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": (
+                                        "OK"
+                                        if result[
+                                            "success"
+                                        ]
+                                        else "ERROR"
+                                    ),
+                                    **{
+                                        key: value
+                                        for key, value
+                                        in result.items()
+                                        if key
+                                        != "success"
+                                    }
+                                }
+                            )
 
                     # =====================================
                     # DELETE USER
                     # =====================================
 
-                    elif request_type == "DELETE_USER":
-                        admin, error = (
-                            get_admin_user(
-                                request.get(
-                                    "token"
-                                )
-                            )
-                        )
-
-                        if error is not None:
+                    elif (
+                        request_type
+                        == "DELETE_USER"
+                    ):
+                        if not is_admin(
+                            user
+                        ):
                             send_json(
                                 client_socket,
                                 {
                                     "status": "ERROR",
-                                    "message": error
+                                    "message": (
+                                        "Недостатньо "
+                                        "прав доступу."
+                                    )
                                 }
                             )
-                            continue
 
-                        result = delete_user(
-                            admin_user_id=admin[
-                                "UserId"
-                            ],
-                            target_user_id=request.get(
-                                "user_id"
-                            )
-                        )
-
-                        send_result(
-                            client_socket,
-                            result
-                        )
-
-                        if result["success"]:
-                            terminate_online_user(
-                                result["user_id"],
-                                "Ваш обліковий запис видалено адміністратором."
-                            )
-
-                    # =====================================
-                    # GET AUDIT LOG
-                    # =====================================
-
-                    elif request_type == "GET_AUDIT_LOG":
-                        admin, error = (
-                            get_admin_user(
+                        else:
+                            target_user_id = (
                                 request.get(
-                                    "token"
+                                    "user_id"
                                 )
                             )
-                        )
 
-                        if error is not None:
+                            result = (
+                                delete_user_account(
+                                    user,
+                                    target_user_id
+                                )
+                            )
+
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": (
+                                        "OK"
+                                        if result[
+                                            "success"
+                                        ]
+                                        else "ERROR"
+                                    ),
+                                    **{
+                                        key: value
+                                        for key, value
+                                        in result.items()
+                                        if key
+                                        != "success"
+                                    }
+                                }
+                            )
+
+                            if result[
+                                "success"
+                            ]:
+                                send_event_to_user(
+                                    target_user_id,
+                                    {
+                                        "type": (
+                                            "SESSION_TERMINATED"
+                                        ),
+                                        "reason": (
+                                            "Ваш обліковий "
+                                            "запис видалено "
+                                            "адміністратором."
+                                        )
+                                    }
+                                )
+
+                                set_user_offline(
+                                    target_user_id
+                                )
+
+                    # =====================================
+                    # AUDIT LOG
+                    # =====================================
+
+                    elif (
+                        request_type
+                        == "GET_AUDIT_LOG"
+                    ):
+                        if not is_admin(
+                            user
+                        ):
                             send_json(
                                 client_socket,
                                 {
                                     "status": "ERROR",
-                                    "message": error
+                                    "message": (
+                                        "Недостатньо "
+                                        "прав доступу."
+                                    )
                                 }
                             )
-                            continue
 
-                        logs = get_audit_log(
-                            request.get(
-                                "limit",
-                                100
+                        else:
+                            logs = get_audit_logs(
+                                request.get(
+                                    "limit",
+                                    100
+                                )
                             )
-                        )
 
-                        send_json(
-                            client_socket,
-                            {
-                                "status": "OK",
-                                "logs": logs
-                            }
-                        )
+                            send_json(
+                                client_socket,
+                                {
+                                    "status": "OK",
+                                    "logs": logs
+                                }
+                            )
 
                     # =====================================
-                    # UNKNOWN
+                    # UNKNOWN COMMAND
                     # =====================================
 
                     else:
@@ -1049,18 +2615,11 @@ def handle_client(
                             client_socket,
                             {
                                 "status": "ERROR",
-                                "message": "Unknown command."
+                                "message": (
+                                    "Невідома команда."
+                                )
                             }
                         )
-
-                except json.JSONDecodeError:
-                    send_json(
-                        client_socket,
-                        {
-                            "status": "ERROR",
-                            "message": "Invalid JSON."
-                        }
-                    )
 
     except ConnectionResetError:
         print(
@@ -1068,21 +2627,31 @@ def handle_client(
             f"{client_address}"
         )
 
-    except OSError:
+    except UnicodeDecodeError:
         print(
-            f"Socket closed: "
+            f"Invalid UTF-8 data from "
             f"{client_address}"
         )
 
-    finally:
-        unregister_online_user(
-            connected_user_id,
-            client_socket
+    except Exception as error:
+        print(
+            f"Client error "
+            f"{client_address}:",
+            error
         )
 
-        unregister_socket(
-            client_socket
-        )
+    finally:
+        if current_user_id is not None:
+            set_user_offline(
+                current_user_id,
+                client_socket
+            )
+
+        with socket_send_locks_lock:
+            socket_send_locks.pop(
+                client_socket,
+                None
+            )
 
         try:
             client_socket.close()
@@ -1112,7 +2681,10 @@ def start_server():
     )
 
     server_socket.bind(
-        (HOST, PORT)
+        (
+            HOST,
+            PORT
+        )
     )
 
     server_socket.listen()
@@ -1133,7 +2705,7 @@ def start_server():
                 client_address
             ) = server_socket.accept()
 
-            client_thread = threading.Thread(
+            thread = threading.Thread(
                 target=handle_client,
                 args=(
                     client_socket,
@@ -1142,7 +2714,7 @@ def start_server():
                 daemon=True
             )
 
-            client_thread.start()
+            thread.start()
 
     except KeyboardInterrupt:
         print(
@@ -1152,6 +2724,10 @@ def start_server():
     finally:
         server_socket.close()
 
+
+# =========================================================
+# START
+# =========================================================
 
 if __name__ == "__main__":
     start_server()

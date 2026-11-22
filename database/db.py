@@ -178,6 +178,34 @@ def create_user(
             "message": "Не вдалося створити користувача."
         }
 
+def is_username_available(username):
+    """
+    Перевіряє, чи вільний логін.
+    """
+
+    username = (
+        username
+        .strip()
+    )
+
+    if not username:
+        return False
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT 1
+            FROM Users
+            WHERE Username = ?
+            LIMIT 1
+            """,
+            (username,)
+        )
+
+        user = cursor.fetchone()
+
+    return user is None
+
 
 def create_admin_user(
     username,

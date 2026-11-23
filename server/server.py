@@ -3,6 +3,7 @@
 import socket
 import threading
 import json
+import codecs
 import sys
 from pathlib import Path
 
@@ -1597,6 +1598,10 @@ def handle_client(
 
     current_user_id = None
 
+    decoder = codecs.getincrementaldecoder(
+        "utf-8"
+    )()
+
     try:
         while True:
             data = client_socket.recv(
@@ -1606,8 +1611,8 @@ def handle_client(
             if not data:
                 break
 
-            buffer += data.decode(
-                "utf-8"
+            buffer += decoder.decode(
+                data
             )
 
             while "\n" in buffer:

@@ -726,24 +726,17 @@ class RegisterWindow(QWidget):
             text
         )
 
-        if state == "available":
-            color = "#8FE3B1"
+        self.username_status_label.setProperty(
+            "state",
+            state
+        )
 
-        elif state == "checking":
-            color = "#B7A7CF"
+        self.username_status_label.style().unpolish(
+            self.username_status_label
+        )
 
-        else:
-            color = "#FF7D9C"
-
-        self.username_status_label.setStyleSheet(
-            f"""
-            QLabel {{
-                background: transparent;
-                color: {color};
-                font-size: 12px;
-                font-weight: 500;
-            }}
-            """
+        self.username_status_label.style().polish(
+            self.username_status_label
         )
 
         self.username_status_label.show()
